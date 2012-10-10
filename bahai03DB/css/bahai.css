@@ -1,0 +1,10 @@
+label.field_header { font-size:small }
+
+body { margin:0 }
+.form_body { padding-left:6px }
+.form_header { color:#101090; font-size:large; font-weight:bold }
+.banner { background-color:#BBBBFF; margin:0; font-size:x-large; }
+.edit_error { color:#ff3333; font-size:medium; font-weight:bold }
+.last_transaction {color:green; font-size:medium }
+
+td.left_label { width:130px; }  /* text-align:right */

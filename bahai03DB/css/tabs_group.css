@@ -1,0 +1,7 @@
+.tabs {position:relative; border:1px;
+       margin:0; padding:0; list-style-type:none; }
+.tabs a.tabs-selected {background:#bbb; }
+.tabs a  { font:11px verdana, helvetica, sans-serif;font-weight:bold;
+           padding:3px 8px 2px 8px; text-decoration:none; background:#dadada; }
+.tabs a:hover, a.tabs-selected:hover {background:#f4f4f4;}
+.tabs li {display:inline; border-right:1px solid #194367; }

@@ -1,0 +1,20 @@
+.pd_menu { font-family: Arial, Helvetica, sans-serif; }
+
+.pd_menu ul { list-style-type:none; padding:0; margin:0; }
+
+.pd_menu li { width:120px; float:left; position:relative; z-index:1; }
+
+.pd_menu a, .pd_menu a:visited {
+  display:block; float:left; line-height:17px; width:120px; 
+  font-size:11px; text-decoration:none; 
+  color:#fff; background:#88b; 
+  border:1px solid #000; border-width:1px 1px 0px 1px; 
+  padding-left:10px; padding-top:2px; padding-bottom: 5px;
+}
+
+.pd_menu ul ul {
+    visibility:hidden; position:absolute; height:0; left:0; top:25px; }
+
+.pd_menu a:hover, .pd_menu ul ul a:hover { color:#000; background:#ddd; } 
+
+.pd_menu ul :hover ul{ visibility:visible }

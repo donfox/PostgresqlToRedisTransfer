@@ -1,0 +1,5543 @@
+--
+-- PostgreSQL database dump
+--
+
+SET client_encoding = 'UTF8';
+SET check_function_bodies = false;
+SET client_min_messages = warning;
+
+--
+-- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: postgres
+--
+
+COMMENT ON SCHEMA public IS 'Standard public schema';
+
+
+--
+-- Name: plpgsql; Type: PROCEDURAL LANGUAGE; Schema: -; Owner: 
+--
+
+CREATE PROCEDURAL LANGUAGE plpgsql;
+
+
+SET search_path = public, pg_catalog;
+
+--
+-- Name: add_edit_error(integer, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION add_edit_error(p_edit_errors_group_id integer, p_message character varying, p_context character varying) RETURNS void
+    AS $$
+DECLARE
+    v_edit_error_num   integer;
+BEGIN
+
+    v_edit_error_num := 0;
+
+    SELECT INTO v_edit_error_num  MAX(edit_error_num)
+        FROM edit_error 
+        WHERE edit_errors_group_id = p_edit_errors_group_id;
+
+    IF v_edit_error_num is NULL  THEN
+        v_edit_error_num := 0;
+    END IF;
+
+    v_edit_error_num := v_edit_error_num + 1;
+
+    INSERT INTO edit_error(
+            edit_errors_group_id,
+            edit_error_num,
+            message,
+            context)
+        VALUES(
+            p_edit_errors_group_id,
+            v_edit_error_num,
+            p_message,
+            p_context);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.add_edit_error(p_edit_errors_group_id integer, p_message character varying, p_context character varying) OWNER TO bmartin;
+
+--
+-- Name: app_user_set_privilege(character varying, character varying, smallint); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION app_user_set_privilege(p_login character varying, p_domain character varying, p_privilege_level smallint) RETURNS void
+    AS $$
+DECLARE
+    v_privilege_level    smallint;
+BEGIN
+    SELECT INTO v_privilege_level privilege_level
+    FROM app_user_privilege
+    WHERE login = p_login AND domain = p_domain;
+
+    IF FOUND THEN
+        IF (v_privilege_level != p_privilege_level) THEN 
+            UPDATE app_user_privilege
+            SET privilege_level = p_privilege_level
+            WHERE login = p_login  AND  domain = p_domain;
+        END IF;
+    ELSE
+        IF (p_privilege_level > 0) THEN
+            INSERT INTO app_user_privilege(login,domain,privilege_level)
+            VALUES(p_login,p_domain,p_privilege_level);
+        END IF;
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.app_user_set_privilege(p_login character varying, p_domain character varying, p_privilege_level smallint) OWNER TO bmartin;
+
+--
+-- Name: associate_member_healthcare_provider(integer, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION associate_member_healthcare_provider(p_person_id integer, p_healthcare_prov_id integer) RETURNS void
+    AS $$
+BEGIN
+
+    INSERT into member_healthcare_provider(
+        person_id,
+        healthcare_prov_id)
+    VALUES(
+        p_person_id,
+        p_healthcare_prov_id);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.associate_member_healthcare_provider(p_person_id integer, p_healthcare_prov_id integer) OWNER TO bmartin;
+
+--
+-- Name: calc_age_category(timestamp without time zone, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION calc_age_category(p_date_of_birth timestamp without time zone, p_age_category character) RETURNS character
+    AS $$
+DECLARE
+    v_age    integer;
+BEGIN
+
+    IF NOT (p_date_of_birth IS NULL) THEN
+        SELECT into v_age
+            extract (year from age(now(), p_date_of_birth));
+        IF (v_age < 10) THEN
+            RETURN 'C';
+        ELSIF (v_age < 15) THEN
+            RETURN 'J';
+        ELSIF (v_age < 21) THEN
+            RETURN 'Y';
+        ELSE
+            RETURN 'A';
+        END IF;
+    ELSIF NOT (p_age_category IS NULL) THEN
+        RETURN p_age_category;
+    ELSE
+        RETURN 'A';
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.calc_age_category(p_date_of_birth timestamp without time zone, p_age_category character) OWNER TO bmartin;
+
+--
+-- Name: change_password(character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION change_password(p_login character varying, p_password character varying) RETURNS void
+    AS $$
+DECLARE
+    v_password varchar;
+    v_password_old varchar;
+    v_ts timestamp;
+BEGIN
+    SELECT INTO v_password, v_password_old
+        password, password_old
+        FROM app_user WHERE login = p_login;
+
+    IF  p_password = v_password  OR  p_password = v_password_old THEN
+        RAISE EXCEPTION 'Cannot reuse old password';
+        RETURN;
+    END IF;
+
+    UPDATE app_user
+    SET
+        password_old = v_password,
+        password = p_password,
+        password_change_ts = now()
+    WHERE login = p_login;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.change_password(p_login character varying, p_password character varying) OWNER TO bmartin;
+
+--
+-- Name: cluster_update_atc_members(character varying, integer[]); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION cluster_update_atc_members(p_cluster_code character varying, p_members integer[]) RETURNS void
+    AS $$
+BEGIN
+
+    DELETE from atc_member WHERE cluster_code = p_cluster_code;
+   
+    FOR i IN 1..array_upper(p_members, 1) LOOP
+        INSERT INTO atc_member(cluster_code, person_id)
+            VALUES(p_cluster_code, p_members[i]);
+    END LOOP;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.cluster_update_atc_members(p_cluster_code character varying, p_members integer[]) OWNER TO bmartin;
+
+--
+-- Name: current_sess_id(); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION current_sess_id() RETURNS character varying
+    AS $$
+DECLARE
+    v_sess_id varchar;
+BEGIN
+    SELECT into v_sess_id sess_id from session_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'SESSION PROBLEM';
+    END IF;
+
+    RETURN v_sess_id;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.current_sess_id() OWNER TO bmartin;
+
+--
+-- Name: delete_address(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_address(p_address_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    DELETE from address 
+    WHERE address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_address(p_address_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_app_user(character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_app_user(p_login character varying) RETURNS void
+    AS $$
+BEGIN
+    DELETE FROM app_user WHERE login = p_login;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_app_user(p_login character varying) OWNER TO bmartin;
+
+--
+-- Name: delete_bahai_cluster(character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_bahai_cluster(p_cluster_code character varying) RETURNS void
+    AS $$
+BEGIN
+
+    DELETE FROM bahai_cluster
+    WHERE cluster_code = p_cluster_code;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_bahai_cluster(p_cluster_code character varying) OWNER TO bmartin;
+
+--
+-- Name: delete_bahai_community(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_bahai_community(p_bahai_cmty_id integer) RETURNS integer
+    AS $$
+BEGIN
+    DELETE from bahai_community
+    WHERE 
+        bahai_cmty_id = p_bahai_cmty_id;
+
+    RETURN 0;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_bahai_community(p_bahai_cmty_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_ca_address(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_ca_address(p_address_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    DELETE from ca_address 
+    WHERE address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_ca_address(p_address_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_edit_errors_group(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_edit_errors_group(p_edit_errors_group_id integer) RETURNS void
+    AS $$
+BEGIN
+
+    DELETE FROM edit_errors_group
+        WHERE edit_errors_group_id = p_edit_errors_group_id;
+    DELETE FROM edit_error
+        WHERE edit_errors_group_id = p_edit_errors_group_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_edit_errors_group(p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_emergency_contact(integer, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_emergency_contact(p_person_id integer, p_rel_person_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    -- Make the function tolerant of non-existence.
+    PERFORM person_id from emergency_contact 
+    WHERE
+        person_id = p_person_id  AND
+        person_id = p_person_id;
+
+    IF FOUND THEN
+        DELETE FROM emergency_contact
+        WHERE
+            person_id = p_person_id  AND
+            person_id = p_person_id;
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_emergency_contact(p_person_id integer, p_rel_person_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_event(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_event(p_event_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_edit_errors_group_id   integer;
+BEGIN
+
+    SELECT into v_edit_errors_group_id
+        edit_errors_group_id
+        FROM event
+        WHERE event_id = p_event_id;
+
+    IF NOT v_edit_errors_group_id IS NULL THEN
+        PERFORM delete_edit_errors_group(v_edit_errors_group_id);
+    END IF;
+
+    DELETE FROM event
+        WHERE event_id = p_event_id;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_event(p_event_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_event_person(integer, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_event_person(p_event_id integer, p_person_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    -- Make the function tolerant of non-existence.
+    PERFORM event_id from event_person 
+    WHERE
+        event_id = p_event_id  AND
+        person_id = p_person_id;
+
+    IF FOUND THEN
+        DELETE FROM event_person
+        WHERE
+            event_id = p_event_id  AND
+            person_id = p_person_id;
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_event_person(p_event_id integer, p_person_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_gb_address(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_gb_address(p_address_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    DELETE from gb_address 
+    WHERE address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_gb_address(p_address_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_gb_location(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_gb_location(bahai_cmty_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    DELETE from gb_location 
+    WHERE bahai_cmty_id = bahai_cmty_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_gb_location(bahai_cmty_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_medical_condition(integer, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_medical_condition(person_id integer, disease_condition character varying) RETURNS void
+    AS $$
+BEGIN
+
+    DELETE FROM medical_condition
+    WHERE 
+        person_id = p_person_id  AND
+        disease_condition = p_disease_condition;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_medical_condition(person_id integer, disease_condition character varying) OWNER TO bmartin;
+
+--
+-- Name: delete_member(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_member(p_person_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_edit_errors_group_id    integer;
+BEGIN
+    SELECT into v_edit_errors_group_id 
+        edit_errors_group_id
+        FROM member
+        WHERE person_id = p_person_id;
+
+    IF NOT v_edit_errors_group_id IS NULL THEN
+        PERFORM delete_edit_errors_group(v_edit_errors_group_id);
+    END IF;
+
+    DELETE FROM member
+        WHERE person_id = p_person_id;
+
+    DELETE FROM person
+        WHERE person_id = p_person_id;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_member(p_person_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_member_employment(integer, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_member_employment(p_person_id integer, p_employer_name character varying) RETURNS void
+    AS $$
+DECLARE
+    v_employer_addr_id  int4;
+BEGIN
+
+    SELECT into v_employer_addr_id employer_addr_id 
+    FROM member_employment
+    WHERE
+        person_id = p_person_id  AND  employer_name = p_employer_name;
+
+    IF FOUND THEN 
+        DELETE FROM address
+        WHERE address_id = v_employer_addr_id;
+    END IF;
+
+    DELETE FROM member_employment
+    WHERE
+        person_id = p_person_id  AND  employer_name = p_employer_name;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_member_employment(p_person_id integer, p_employer_name character varying) OWNER TO bmartin;
+
+--
+-- Name: delete_person(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_person(p_person_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_person record;
+BEGIN
+    SELECT into v_person * 
+        FROM person
+        WHERE person_id = p_person_id;
+
+    -- *****************************
+
+    DELETE FROM person
+      WHERE person_id = p_person_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_person(p_person_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_us_address(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_us_address(p_address_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    DELETE from us_address 
+    WHERE address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_us_address(p_address_id integer) OWNER TO bmartin;
+
+--
+-- Name: delete_website(character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION delete_website(p_website_url character varying) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+    
+    DELETE FROM website
+        WHERE website_url = p_website_url;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.delete_website(p_website_url character varying) OWNER TO bmartin;
+
+--
+-- Name: dissociate_member_healthcare_provider(integer, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION dissociate_member_healthcare_provider(p_person_id integer, p_healthcare_prov_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_count integer;
+BEGIN
+
+    DELETE FROM member_healthcare_provider
+    WHERE
+        person_id = p_person_id  AND
+        healthcare_prov_id = p_healthcare_prov_id;
+
+    SELECT INTO v_count COUNT FROM member_healthcare_provider
+    WHERE
+        healthcare_prov_id = p_healthcare_prov_id;
+
+    IF v_count = 0  THEN
+        DELETE FROM healthcare_provider
+        WHERE healthcare_prov_id = p_healthcare_prov_id;
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.dissociate_member_healthcare_provider(p_person_id integer, p_healthcare_prov_id integer) OWNER TO bmartin;
+
+--
+-- Name: end_session(character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION end_session(p_session_id character varying) RETURNS void
+    AS $$
+BEGIN
+    UPDATE app_session
+    SET
+        session_end_ts = now()
+    WHERE 
+        session_id = p_session_id  AND
+        session_end_ts is NULL;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.end_session(p_session_id character varying) OWNER TO bmartin;
+
+--
+-- Name: establish_session(character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION establish_session(p_login character varying, p_password character varying, p_sess_id character varying) RETURNS timestamp without time zone
+    AS $$
+DECLARE
+    v_login              varchar;
+    v_password           varchar;
+    v_previous_login_ts  timestamp;
+BEGIN
+    -- Check to see if there's a match (by login) for the superuser.
+    -- If it is an attempt at logging in as superuser, then regardless of
+    -- whether there's a password match, we don't want to try the 'app_user'
+    -- table.
+    SELECT password FROM superuser INTO v_password
+    WHERE superuser.login = p_login;
+
+    IF FOUND THEN
+        IF (v_password != p_password) THEN
+            RAISE EXCEPTION 'Invalid Login/Password';
+        END IF;
+        v_login := NULL;
+
+    --  Otherwise if this is another user, just check to see if the
+    --  login/password is valid.
+    ELSE
+        PERFORM login
+        FROM app_user
+        WHERE
+            app_user.login = p_login  AND
+            app_user.password = p_password;
+
+        IF NOT FOUND  THEN
+            RAISE EXCEPTION 'Invalid Login/Password';
+        END IF;
+
+        v_login := p_login;
+    END IF;
+
+    PERFORM end_session(p_sess_id);
+
+    --  For a successful login, insert a record into 'app_session' for
+    --  this session.
+    --  But first, we need to read the starting timestamp from the
+    --  last session for this user.
+    IF (v_login IS NULL) THEN
+        SELECT session_start_ts
+        FROM app_session
+            INTO v_previous_login_ts
+            WHERE login IS NULL
+            ORDER BY session_start_ts DESC
+            LIMIT 1;
+    ELSE
+        SELECT session_start_ts
+        FROM app_session
+            INTO v_previous_login_ts
+            WHERE login = p_login 
+            ORDER BY session_start_ts DESC
+            LIMIT 1;
+    END IF;
+
+    IF NOT FOUND THEN
+        v_previous_login_ts := NULL;
+    END IF;
+
+    INSERT into app_session (session_id, login)
+    VALUES (p_sess_id, v_login);
+
+    --
+    PERFORM save_session_id(p_sess_id);
+
+    RETURN v_previous_login_ts;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.establish_session(p_login character varying, p_password character varying, p_sess_id character varying) OWNER TO bmartin;
+
+--
+-- Name: event_set_counts(integer, smallint, smallint, smallint, smallint, smallint, smallint, smallint, smallint, smallint, smallint, smallint, smallint); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION event_set_counts(p_event_id integer, p_num_bahai_adults smallint, p_num_bahai_youths smallint, p_num_bahai_juniors smallint, p_num_bahai_children smallint, p_num_non_bahai_adults smallint, p_num_non_bahai_youths smallint, p_num_non_bahai_juniors smallint, p_num_non_bahai_children smallint, p_num_new_non_bahai_adults smallint, p_num_new_non_bahai_youths smallint, p_num_new_non_bahai_juniors smallint, p_num_new_non_bahai_children smallint) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    PERFORM event_id FROM event_counts WHERE event_id = p_event_id;
+
+    IF FOUND THEN
+        UPDATE event_counts
+        SET 
+            num_bahai_adults = p_num_bahai_adults,
+            num_bahai_youths = p_num_bahai_youths,
+            num_bahai_juniors = p_num_bahai_juniors,
+            num_bahai_children = p_num_bahai_children,
+            num_non_bahai_adults = p_num_non_bahai_adults,
+            num_non_bahai_youths = p_num_non_bahai_youths,
+            num_non_bahai_juniors = p_num_non_bahai_juniors,
+            num_non_bahai_children = p_num_non_bahai_children,
+            num_new_non_bahai_adults = p_num_new_non_bahai_adults,
+            num_new_non_bahai_youths = p_num_new_non_bahai_youths,
+            num_new_non_bahai_juniors = p_num_new_non_bahai_juniors,
+            num_new_non_bahai_children = p_num_new_non_bahai_children
+        WHERE  event_id = p_event_id;
+    ELSE
+        INSERT into event_counts(
+            event_id,
+            num_bahai_adults,
+            num_bahai_youths,
+            num_bahai_juniors,
+            num_bahai_children,
+            num_non_bahai_adults,
+            num_non_bahai_youths,
+            num_non_bahai_juniors,
+            num_non_bahai_children,
+            num_new_non_bahai_adults,
+            num_new_non_bahai_youths,
+            num_new_non_bahai_juniors,
+            num_new_non_bahai_children )
+        VALUES(
+            p_event_id,
+            p_num_bahai_adults,
+            p_num_bahai_youths,
+            p_num_bahai_juniors,
+            p_num_bahai_children,
+            p_num_non_bahai_adults,
+            p_num_non_bahai_youths,
+            p_num_non_bahai_juniors,
+            p_num_non_bahai_children,
+            p_num_new_non_bahai_adults,
+            p_num_new_non_bahai_youths,
+            p_num_new_non_bahai_juniors,
+            p_num_new_non_bahai_children );
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.event_set_counts(p_event_id integer, p_num_bahai_adults smallint, p_num_bahai_youths smallint, p_num_bahai_juniors smallint, p_num_bahai_children smallint, p_num_non_bahai_adults smallint, p_num_non_bahai_youths smallint, p_num_non_bahai_juniors smallint, p_num_non_bahai_children smallint, p_num_new_non_bahai_adults smallint, p_num_new_non_bahai_youths smallint, p_num_new_non_bahai_juniors smallint, p_num_new_non_bahai_children smallint) OWNER TO bmartin;
+
+--
+-- Name: insert_address(character varying, character varying, character varying, character, character varying, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_address(p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_postal character varying, p_country_code character) RETURNS integer
+    AS $$
+DECLARE
+    v_address_id       integer;
+BEGIN
+    v_address_id := nextval('address_id_seq');
+
+    INSERT into address(
+        address_id,
+        address_1,
+        address_2,
+        city,
+        state_code,
+        zip_postal,
+        country_code)
+    VALUES(
+        v_address_id,
+        p_address_1,
+        p_address_2,
+        p_city,
+        p_state_code,
+        p_zip_postal,
+        'US');
+
+    RETURN v_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_address(p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_postal character varying, p_country_code character) OWNER TO bmartin;
+
+--
+-- Name: insert_app_user(character varying, integer, character varying, character varying, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_app_user(p_login character varying, p_bahai_cmty_id integer, p_full_name character varying, p_email character varying, p_password character varying, p_edit_errors_group_id integer) RETURNS void
+    AS $$
+BEGIN
+    INSERT into app_user(login, bahai_cmty_id, full_name, email, password, 
+           edit_errors_group_id)
+    VALUES(p_login, p_bahai_cmty_id, p_full_name, p_email, p_password,
+           p_edit_errors_group_id);
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_app_user(p_login character varying, p_bahai_cmty_id integer, p_full_name character varying, p_email character varying, p_password character varying, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: insert_bahai_cluster(character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_bahai_cluster(p_cluster_code character varying, p_cluster_name character varying) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    INSERT INTO bahai_cluster(cluster_code, cluster_name)
+    values(p_cluster_code, p_cluster_name);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_bahai_cluster(p_cluster_code character varying, p_cluster_name character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_bahai_community(character varying, character varying, character varying, character varying, boolean, character varying, integer, character varying, character varying, character varying, character varying, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_bahai_community(p_country_code character varying, p_bahai_cmty_code character varying, p_bahai_cmty_name character varying, p_time_zone character varying, p_is_lsa boolean, p_comm_website_url character varying, p_bc_address_id integer, p_bc_phone character varying, p_bc_fax character varying, p_bc_website_url character varying, p_bahai_cluster character varying, p_bahai_eu character varying, p_edit_errors_group_id integer) RETURNS integer
+    AS $$
+DECLARE
+    v_bahai_cmty_id integer;
+BEGIN
+    v_bahai_cmty_id := nextval('bahai_cmty_id_seq');
+
+    INSERT into bahai_community (
+        bahai_cmty_id,
+        country_code,
+        bahai_cmty_code,
+        bahai_cmty_name,
+        time_zone,
+        is_lsa,
+        comm_website_url,
+        bc_address_id,
+        bc_phone,
+        bc_fax,
+        bc_website_url,
+        bahai_cluster,
+        bahai_eu,
+        edit_errors_group_id)
+    VALUES (
+        v_bahai_cmty_id,
+        p_country_code,
+        p_bahai_cmty_code,
+        p_bahai_cmty_name,
+        p_time_zone,
+        p_is_lsa,
+        p_comm_website_url,
+        p_bc_address_id,
+        p_bc_phone,
+        p_bc_fax,
+        p_bc_website_url,
+        p_bahai_cluster,
+        p_bahai_eu,
+        p_edit_errors_group_id);
+
+    RETURN v_bahai_cmty_id;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_bahai_community(p_country_code character varying, p_bahai_cmty_code character varying, p_bahai_cmty_name character varying, p_time_zone character varying, p_is_lsa boolean, p_comm_website_url character varying, p_bc_address_id integer, p_bc_phone character varying, p_bc_fax character varying, p_bc_website_url character varying, p_bahai_cluster character varying, p_bahai_eu character varying, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: insert_ca_address(character varying, character varying, character varying, character, character varying, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_ca_address(p_address_1 character varying, p_address_2 character varying, p_municipality character varying, p_province_abbr character, p_postal_code character varying, p_country_code character) RETURNS integer
+    AS $$
+DECLARE
+    v_address_id       integer;
+BEGIN
+    v_address_id := nextval('address_id_seq');
+
+    INSERT into ca_address(
+        address_id,
+        address_1,
+        address_2,
+        municipality,
+        province_abbr,
+        postal_code,
+        country_code)
+    VALUES(
+        v_address_id,
+        p_address_1,
+        p_address_2,
+        p_municipality,
+        p_province_abbr,
+        p_postal_code,
+        'CA');
+
+    RETURN v_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_ca_address(p_address_1 character varying, p_address_2 character varying, p_municipality character varying, p_province_abbr character, p_postal_code character varying, p_country_code character) OWNER TO bmartin;
+
+--
+-- Name: insert_ca_location(integer, character, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_ca_location(p_bahai_cmty_id integer, p_province_abbr character, p_municipality character varying) RETURNS void
+    AS $$
+BEGIN
+
+    INSERT INTO ca_location(bahai_cmty_id, province_abbr, municipality)
+        VALUES (p_bahai_cmty_id, p_province_abbr, p_municipality);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_ca_location(p_bahai_cmty_id integer, p_province_abbr character, p_municipality character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_edit_errors_group(character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_edit_errors_group(p_datatype character varying, p_row_descriptor character varying) RETURNS integer
+    AS $$
+DECLARE
+    v_edit_errors_group_id  integer;
+    v_sess_id               varchar;
+BEGIN
+
+    v_edit_errors_group_id := nextval('edit_errors_group_id_seq');
+
+    v_sess_id := current_sess_id();
+
+    INSERT INTO edit_errors_group(
+        edit_errors_group_id,
+        session_id,
+        datatype,  
+        row_descriptor)
+    VALUES(
+        v_edit_errors_group_id,
+        v_sess_id,
+        p_datatype,
+        p_row_descriptor);
+
+    RETURN v_edit_errors_group_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_edit_errors_group(p_datatype character varying, p_row_descriptor character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_event(character varying, integer, integer, timestamp without time zone, timestamp without time zone, integer, integer, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_event(p_event_type_code character varying, p_event_session integer, p_event_address_id integer, p_event_start_ts timestamp without time zone, p_event_end_ts timestamp without time zone, p_bahai_cmty_id integer, p_host_bahai_cmty_id integer, p_description character varying, p_notes character varying) RETURNS integer
+    AS $$
+DECLARE
+    v_event_id  integer;
+BEGIN
+    v_event_id := nextval('event_seq');
+
+    INSERT INTO event(
+        event_id, 
+        event_type_code,
+        event_session,
+        event_address_id,
+        event_start_ts,
+        event_end_ts,
+        bahai_cmty_id,
+        host_bahai_cmty_id,
+        description,
+        notes)
+    VALUES(
+        v_event_id,
+        p_event_type_code,
+        p_event_session,
+        p_event_address_id,
+        p_event_start_ts,
+        p_event_end_ts,
+        p_bahai_cmty_id,
+        p_host_bahai_cmty_id,
+        p_description,
+        p_notes);
+
+
+    RETURN v_event_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_event(p_event_type_code character varying, p_event_session integer, p_event_address_id integer, p_event_start_ts timestamp without time zone, p_event_end_ts timestamp without time zone, p_bahai_cmty_id integer, p_host_bahai_cmty_id integer, p_description character varying, p_notes character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_event_notice(integer, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_event_notice(p_event_id integer, p_event_notice_type character varying, p_event_notice_text character varying) RETURNS timestamp without time zone
+    AS $$
+DECLARE
+    v_event_notice_ts   TIMESTAMP;
+BEGIN
+
+    v_event_notice_ts := now();
+
+    INSERT INTO event_notice(
+        event_id,
+        event_notice_ts,
+        event_notice_type,
+        event_notice_text)
+    VALUES (
+        p_event_id,
+        v_event_notice_ts,
+        p_event_notice_type,
+        p_event_notice_text);
+
+    RETURN v_event_notice_ts;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_event_notice(p_event_id integer, p_event_notice_type character varying, p_event_notice_text character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_gb_address(character varying, character varying, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_gb_address(p_address_1 character varying, p_building_name character varying, p_street_address character varying, p_locality character varying, p_post_town character varying, p_postcode character varying) RETURNS integer
+    AS $$
+DECLARE
+    v_address_id       integer;
+BEGIN
+
+    v_address_id := nextval('address_id_seq');
+
+    INSERT INTO gb_address(
+        address_id,
+        address_1,
+        building_name,
+        street_address,
+        locality,
+        post_town,
+        postcode)
+    VALUES (
+        v_address_id,
+        p_address_1,
+        p_building_name,
+        p_street_address,
+        p_locality,
+        p_post_town,
+        p_postcode);
+
+    RETURN v_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_gb_address(p_address_1 character varying, p_building_name character varying, p_street_address character varying, p_locality character varying, p_post_town character varying, p_postcode character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_gb_location(integer, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_gb_location(p_bahai_cmty_id integer, p_post_town character varying) RETURNS void
+    AS $$
+BEGIN
+
+    INSERT INTO gb_location(
+        bahai_cmty_id,
+        post_town)
+    VALUES (
+        p_bahai_cmty_id,
+        p_post_town);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_gb_location(p_bahai_cmty_id integer, p_post_town character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_healthcare_provider(integer, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_healthcare_provider(p_person_id integer, p_npid character varying, p_professional_type character varying, p_practice_group character varying) RETURNS integer
+    AS $$
+DECLARE
+    v_healthcare_prov_id integer;
+BEGIN
+
+    v_healthcare_prov_id := nextval('healthcare_prov_id_seq');
+    
+    INSERT INTO healthcare_provider(
+        healthcare_prov_id,
+        person_id,
+        npid,
+        professional_type,
+        practice_group)
+    VALUES(
+        v_healthcare_prov_id,
+        p_person_id,
+        p_npid,
+        p_professional_type,
+        p_practice_group);
+
+    RETURN v_healthcare_prov_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_healthcare_provider(p_person_id integer, p_npid character varying, p_professional_type character varying, p_practice_group character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_medical_condition(integer, character varying, character varying, character varying, boolean); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_medical_condition(p_person_id integer, p_disease_condition character varying, p_medicine character varying, p_equipment character varying, p_require_power boolean) RETURNS void
+    AS $$
+BEGIN
+
+    INSERT INTO medical_condition(
+        person_id,
+        disease_condition,
+        medicine,
+        equipment,
+        require_power)
+    VALUES(
+        p_person_id,
+        p_disease_condition,
+        p_medicine,
+        p_equipment,
+        p_require_power);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_medical_condition(p_person_id integer, p_disease_condition character varying, p_medicine character varying, p_equipment character varying, p_require_power boolean) OWNER TO bmartin;
+
+--
+-- Name: insert_member(character varying, character varying, boolean, character varying, character varying, date, date, integer, character, character varying, date, boolean, character, character varying, boolean, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_member(p_last_name character varying, p_first_name character varying, p_is_male boolean, p_language character varying, p_language_2nd character varying, p_date_of_birth date, p_date_of_death date, p_bahai_cmty_id integer, p_bahai_id_country character, p_bahai_id character varying, p_date_became_bahai date, p_is_deprived boolean, p_age_category character, p_occupation character varying, p_is_healthcare_provider boolean, p_edit_errors_group_id integer) RETURNS integer
+    AS $$
+DECLARE
+    v_person_id      integer;
+BEGIN
+   v_person_id := nextval('person_id_seq');
+
+    INSERT into person(
+        person_id,
+        bahai_cmty_id,
+        person_category,
+        last_name,
+        first_name,
+        primary_phone,
+        primary_email,
+        contact_address_id,
+        bahai_id_country,
+        bahai_id,
+        edit_errors_group_id)
+    VALUES(
+        v_person_id,
+        p_bahai_cmty_id,
+        CAST (1 as smallint),
+        p_last_name,
+        p_first_name,
+        NULL,
+        NULL,
+        NULL,
+        p_bahai_id_country,
+        p_bahai_id,
+        p_edit_errors_group_id);
+
+    INSERT INTO member(
+        person_id,
+        last_name,
+        first_name,
+        is_male,
+        language, 
+        language_2nd, 
+        date_of_birth,
+        date_of_death,
+        bahai_cmty_id,
+        bahai_id_country,
+        bahai_id,
+        date_became_bahai,
+        is_deprived,
+        age_category,
+        occupation,
+        is_healthcare_provider,
+        edit_errors_group_id
+        )
+    VALUES(
+        v_person_id,
+        p_last_name,
+        p_first_name,
+        p_is_male,
+        p_language,
+        p_language_2nd,
+        p_date_of_birth,
+        p_date_of_death,
+        p_bahai_cmty_id,
+        p_bahai_id_country,
+        p_bahai_id,
+        p_date_became_bahai,
+        p_is_deprived,
+        p_age_category,
+        p_occupation,
+        p_is_healthcare_provider,
+        p_edit_errors_group_id
+    );
+
+    RETURN v_person_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_member(p_last_name character varying, p_first_name character varying, p_is_male boolean, p_language character varying, p_language_2nd character varying, p_date_of_birth date, p_date_of_death date, p_bahai_cmty_id integer, p_bahai_id_country character, p_bahai_id character varying, p_date_became_bahai date, p_is_deprived boolean, p_age_category character, p_occupation character varying, p_is_healthcare_provider boolean, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: insert_member_employment(integer, character varying, integer, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_member_employment(p_person_id integer, p_employer_name character varying, p_employer_addr_id integer, p_employer_phone character varying, p_member_work_phone character varying, p_member_work_email character varying) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    INSERT into member_employment(
+        person_id,
+        employer_name,
+        employer_addr_id,
+        employer_phone,
+        member_work_phone,
+        member_work_email )
+    VALUES(
+        p_person_id,
+        p_employer_name,
+        p_employer_addr_id,
+        p_employer_phone,
+        p_member_work_phone,
+        p_member_work_email );
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_member_employment(p_person_id integer, p_employer_name character varying, p_employer_addr_id integer, p_employer_phone character varying, p_member_work_phone character varying, p_member_work_email character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_person(integer, smallint, character varying, character varying, character varying, character varying, integer, character, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_person(p_bahai_cmty_id integer, p_person_category smallint, p_last_name character varying, p_first_name character varying, p_primary_phone character varying, p_primary_email character varying, p_contact_address_id integer, p_bahai_id_country character, p_bahai_id character varying, p_edit_errors_group_id integer) RETURNS integer
+    AS $$
+DECLARE
+    v_person_id integer;
+BEGIN
+    v_person_id := nextval('person_id_seq');
+
+    INSERT into person(
+        person_id,
+        bahai_cmty_id,
+        person_category,
+        last_name,
+        first_name,
+        primary_phone,
+        primary_email,
+        contact_address_id,
+        bahai_id_country,
+        bahai_id,
+        edit_errors_group_id)
+    VALUES(
+        v_person_id,
+        p_bahai_cmty_id,
+        p_person_category,
+        p_last_name,
+        p_first_name,
+        p_primary_phone,
+        p_primary_email,
+        p_contact_address_id,
+        p_bahai_id_country,
+        p_bahai_id,
+        p_edit_errors_group_id);
+
+    IF (p_person_category = 1) THEN
+        PERFORM insert_update_member_stub(
+            v_person_id,
+            p_bahai_cmty_id,
+            p_last_name,
+            p_first_name,
+            p_bahai_id_country,
+            p_bahai_id,
+            p_primary_phone,
+            p_primary_email,
+            p_contact_address_id);
+
+    END IF;
+
+    RETURN v_person_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_person(p_bahai_cmty_id integer, p_person_category smallint, p_last_name character varying, p_first_name character varying, p_primary_phone character varying, p_primary_email character varying, p_contact_address_id integer, p_bahai_id_country character, p_bahai_id character varying, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: insert_update_emergency_contact(integer, integer, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_update_emergency_contact(p_person_id integer, p_rel_person_id integer, p_relationship character varying) RETURNS void
+    AS $$
+DECLARE
+    v_rec  record;
+BEGIN
+
+    SELECT into v_rec
+        relationship
+    FROM emergency_contact
+    WHERE
+        person_id = p_person_id  AND
+        rel_person_id = p_rel_person_id;
+
+    IF FOUND THEN
+        IF (v_rec.relationship = p_relationship)  THEN
+            RETURN;
+        END IF;
+
+        UPDATE emergency_contact
+        SET
+            relationship = p_relationship
+        WHERE
+            person_id     = p_person_id    AND
+            rel_person_id = p_rel_person_id;
+    ELSE
+        INSERT into emergency_contact(
+            person_id,
+            rel_person_id,
+            relationship)
+        VALUES(
+            p_person_id,
+            p_rel_person_id,
+            p_relationship);
+     END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_update_emergency_contact(p_person_id integer, p_rel_person_id integer, p_relationship character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_update_event_person(integer, integer, character varying, boolean, timestamp without time zone, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_update_event_person(p_event_id integer, p_person_id integer, p_role character varying, p_follow_up boolean, p_follow_up_ts timestamp without time zone, p_follow_up_action character varying) RETURNS void
+    AS $$
+DECLARE
+    v_rec  record;
+BEGIN
+
+    SELECT into v_rec
+        role, follow_up, follow_up_ts, follow_up_action
+    FROM event_person
+    WHERE
+        event_id = p_event_id  AND
+        person_id = p_person_id;
+
+    IF FOUND THEN
+        IF (v_rec.role = p_role  AND  v_rec.follow_up = p_follow_up  AND
+            (v_rec.follow_up_ts = p_follow_up_ts OR
+             (v_rec.follow_up_ts IS NULL AND p_follow_up_ts IS NULL))  AND
+            v_rec.follow_up_action = p_follow_up_action)  THEN
+            RETURN;
+        END IF;
+
+        UPDATE event_person
+        SET
+            role = p_role,
+            follow_up = p_follow_up,
+            follow_up_ts = p_follow_up_ts,
+            follow_up_action = p_follow_up_action
+        WHERE
+            event_id = p_event_id  AND
+            person_id = p_person_id;
+    ELSE
+        INSERT into event_person(
+            event_id,
+            person_id,
+            role,
+            follow_up,
+            follow_up_ts,
+            follow_up_action)
+        VALUES(
+            p_event_id,
+            p_person_id,
+            p_role,
+            p_follow_up,
+            p_follow_up_ts,
+            p_follow_up_action);
+     END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_update_event_person(p_event_id integer, p_person_id integer, p_role character varying, p_follow_up boolean, p_follow_up_ts timestamp without time zone, p_follow_up_action character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_update_member_stub(integer, integer, character varying, character varying, character, character varying, character varying, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_update_member_stub(p_person_id integer, p_bahai_cmty_id integer, p_last_name character varying, p_first_name character varying, p_bahai_id_country character, p_bahai_id character varying, p_primary_phone character varying, p_primary_email character varying, p_address_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_member     record;
+BEGIN
+
+    SELECT INTO v_member * FROM member WHERE person_id = p_person_id;
+
+    IF FOUND THEN 
+        UPDATE member
+        SET
+          bahai_cmty_id = p_bahai_cmty_id,
+          last_name = p_last_name,
+          first_name = p_first_name,
+          bahai_id_country = p_bahai_id_country,
+          bahai_id = p_bahai_id,
+          address_id = p_address_id
+        WHERE
+          person_id = p_person_id;
+
+        PERFORM member_set_primary_phone_email(p_person_id,
+                p_primary_phone, p_primary_email);
+
+    ELSE
+
+        INSERT INTO member(
+            person_id,
+            bahai_cmty_id,
+            last_name,
+            first_name,
+            home_phone,
+            personal_email,
+            primary_phone_choice,
+            primary_email_choice,
+            bahai_id_country,
+            bahai_id
+            )
+        VALUES(
+            p_person_id,
+            p_bahai_cmty_id,
+            p_last_name,
+            p_first_name,
+            p_primary_phone,
+            p_primary_email,
+            1,
+            1,
+            p_bahai_id_country,
+            p_bahai_id
+        );
+
+    END IF;
+
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_update_member_stub(p_person_id integer, p_bahai_cmty_id integer, p_last_name character varying, p_first_name character varying, p_bahai_id_country character, p_bahai_id character varying, p_primary_phone character varying, p_primary_email character varying, p_address_id integer) OWNER TO bmartin;
+
+--
+-- Name: insert_us_address(character varying, character varying, character varying, character, character varying, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_us_address(p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_code character varying, p_country_code character) RETURNS integer
+    AS $$
+DECLARE
+    v_address_id       integer;
+BEGIN
+    v_address_id := nextval('address_id_seq');
+
+    INSERT into us_address(
+        address_id,
+        address_1,
+        address_2,
+        city,
+        state_code,
+        zip_code,
+        country_code)
+    VALUES(
+        v_address_id,
+        p_address_1,
+        p_address_2,
+        p_city,
+        p_state_code,
+        p_zip_code,
+        'US');
+
+    RETURN v_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_us_address(p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_code character varying, p_country_code character) OWNER TO bmartin;
+
+--
+-- Name: insert_us_location(integer, character, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_us_location(p_bahai_cmty_id integer, p_state_code character, p_city character varying) RETURNS void
+    AS $$
+BEGIN
+
+    INSERT INTO us_location(bahai_cmty_id, state_code, city)
+        VALUES (p_bahai_cmty_id, p_state_code, p_city);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_us_location(p_bahai_cmty_id integer, p_state_code character, p_city character varying) OWNER TO bmartin;
+
+--
+-- Name: insert_website(character varying, integer, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION insert_website(p_website_url character varying, p_webmaster integer, p_hosting_company character varying, p_host_company_addr integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+    
+    INSERT INTO website(
+        website_url, webmaster, hosting_company, host_company_addr)
+    VALUES(
+        p_website_url, p_webmaster, p_hosting_company, p_host_company_addr);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.insert_website(p_website_url character varying, p_webmaster integer, p_hosting_company character varying, p_host_company_addr integer) OWNER TO bmartin;
+
+--
+-- Name: leave_feedback(character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION leave_feedback(p_feedback_text character varying) RETURNS void
+    AS $$
+DECLARE
+    v_login    varchar;
+    v_sess_id  varchar;
+BEGIN
+    
+    SELECT into v_sess_id  sess_id FROM session_id;
+    SELECT into v_login  login FROM app_session 
+      WHERE session_id = v_sess_id;
+
+    INSERT INTO feedback(login, feedback_text)
+      VALUES(v_login, p_feedback_text);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.leave_feedback(p_feedback_text character varying) OWNER TO bmartin;
+
+--
+-- Name: log_db_error(character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION log_db_error(p_query character varying, p_error_msg character varying) RETURNS integer
+    AS $$
+DECLARE
+    v_db_error_id   integer;
+BEGIN
+    v_db_error_id := nextval('db_error_id_seq');
+
+    INSERT INTO db_error_log(db_error_id, query, error_msg)
+        VALUES(v_db_error_id, p_query, p_error_msg);
+
+    RETURN v_db_error_id;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.log_db_error(p_query character varying, p_error_msg character varying) OWNER TO bmartin;
+
+--
+-- Name: member_clear_address(boolean, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION member_clear_address(p_is_mailing boolean, p_person_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+    IF p_is_mailing THEN
+        UPDATE member
+        SET 
+            mailing_address_id = NULL,
+            mailing_address_ts = NULL
+        WHERE 
+            person_id = p_person_id;
+    ELSE
+        UPDATE member
+        SET 
+            res_address_id = NULL,
+            res_address_ts = NULL
+        WHERE 
+            person_id = p_person_id;
+    END IF;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.member_clear_address(p_is_mailing boolean, p_person_id integer) OWNER TO bmartin;
+
+--
+-- Name: member_new_address(boolean, integer, character varying, character varying, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION member_new_address(p_is_mailing boolean, p_person_id integer, p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character varying, p_zip_postal character varying, p_country_code character varying) RETURNS integer
+    AS $$    -- address_id
+DECLARE
+    v_address_id integer;
+BEGIN
+    SELECT into v_address_id insert_member_address(p_address_1, p_address_2,
+            p_city, p_state_code, p_zip_postal, p_country_code);
+
+    PERFORM member_set_address(p_is_mailing, p_person_id, v_address_id);
+
+    RETURN v_address_id;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.member_new_address(p_is_mailing boolean, p_person_id integer, p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character varying, p_zip_postal character varying, p_country_code character varying) OWNER TO bmartin;
+
+--
+-- Name: member_propagate_address(integer, integer[], boolean, boolean); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION member_propagate_address(p_from_person_id integer, p_to_person_ids integer[], p_include_residence boolean, p_include_mailing boolean) RETURNS void
+    AS $$
+DECLARE
+    v_from_member RECORD;
+    i integer;
+BEGIN
+    SELECT INTO v_from_member address_id, mailing_address_id
+      FROM member 
+      WHERE person_id = p_from_person_id;
+
+    i := 1;
+    WHILE NOT p_to_person_ids[i] IS NULL LOOP
+       IF p_include_residence THEN
+           PERFORM member_set_address(false, p_to_person_ids[i],
+                   v_from_member.address_id);
+       END IF;
+       IF p_include_mailing THEN
+           PERFORM member_set_address(true, p_to_person_ids[i],
+                   v_from_member.mailing_address_id);
+       END IF;
+       i := i + 1;
+    END LOOP;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.member_propagate_address(p_from_person_id integer, p_to_person_ids integer[], p_include_residence boolean, p_include_mailing boolean) OWNER TO bmartin;
+
+--
+-- Name: member_propagate_from_person(integer, character varying, character varying, integer, character, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION member_propagate_from_person(p_person_id integer, p_primary_phone character varying, p_primary_email character varying, p_contact_address_id integer, p_bahai_id_country character, p_bahai_id character varying) RETURNS void
+    AS $$
+DECLARE
+    v_edit_errors_group_id    integer;
+    v_member               record;
+BEGIN
+    SELECT into v_member
+        home_phone, cell_phone, primary_phone_choice, primary_email_choice,
+        preferred_phone_employer, preferred_email_employer
+      FROM member
+      WHERE person_id = p_person_id;
+
+    PERFORM update_member_contact(p_person_id,
+        p_primary_phone, null, null, 1, 1, null, null, p_primary_email, null);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.member_propagate_from_person(p_person_id integer, p_primary_phone character varying, p_primary_email character varying, p_contact_address_id integer, p_bahai_id_country character, p_bahai_id character varying) OWNER TO bmartin;
+
+--
+-- Name: member_propagate_to_person(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION member_propagate_to_person(p_person_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_edit_errors_group_id    integer;
+    v_member                  record;
+    v_person                  record;
+    v_phone                   varchar;
+    v_email                   varchar;
+BEGIN
+    SELECT into v_member *
+        FROM member
+        WHERE
+            person_id = p_person_id;
+
+    IF v_member.primary_phone_choice = 1  THEN
+        v_phone := v_member.home_phone;
+    ELSIF v_member.primary_phone_choice = 3  THEN
+        v_phone := v_member.cell_phone;
+    ELSIF (v_member.preferred_phone_employer IS NULL) THEN
+        v_phone := NULL;
+    ELSE
+        SELECT into v_phone 
+            member_work_phone 
+            FROM member_employment
+            WHERE
+                person_id = p_person_id AND 
+                employer_name = v_member.preferred_phone_employer;
+    END IF;
+
+
+    IF v_member.primary_email_choice = 1  THEN
+        v_email := v_member.personal_email;
+    ELSIF (v_member.preferred_email_employer IS NULL) THEN
+        v_email := NULL;
+    ELSE
+        SELECT into v_email 
+            member_work_email 
+            FROM member_employment
+            WHERE
+                person_id = p_person_id AND 
+                employer_name = v_member.preferred_email_employer;
+    END IF;
+ 
+
+    SELECT into v_person *
+        FROM person
+        WHERE person_id = p_person_id;
+
+    UPDATE person
+        SET
+          last_name = v_member.last_name,
+          first_name = v_member.first_name,
+          primary_phone = v_phone,
+          primary_email = v_email,
+          bahai_id = v_member.bahai_id,
+          bahai_id_country = v_member.bahai_id_country
+        WHERE  person_id = p_person_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.member_propagate_to_person(p_person_id integer) OWNER TO bmartin;
+
+--
+-- Name: member_set_address(boolean, integer, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION member_set_address(p_is_mailing boolean, p_person_id integer, p_address_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_rec  record;
+BEGIN
+
+    SELECT into v_rec 
+        res_address_id, res_address_ts, 
+        prev_res_address_id, prev_res_address_ts, 
+        mailing_address_id, mailing_address_ts, 
+        prev_mailing_address_id, prev_mailing_address_ts
+    FROM member
+    WHERE person_id = p_person_id;
+
+    IF p_is_mailing THEN
+        IF (v_rec.mailing_address_id IS NULL) THEN
+            UPDATE member
+            SET 
+                mailing_address_id = p_address_id,
+                mailing_address_ts = now()
+            WHERE 
+                person_id = p_person_id;
+        ELSE
+            IF (p_address_id = v_rec.mailing_address_id) THEN
+                RETURN;
+            END IF;
+
+            UPDATE member
+            SET 
+                prev_mailing_address_id = v_rec.mailing_address_id,
+                prev_mailing_address_ts = v_rec.mailing_address_ts,
+                mailing_address_id = p_address_id,
+                mailing_address_ts = now()
+            WHERE 
+                person_id = p_person_id;
+        END IF;
+    ELSE
+        IF (v_rec.res_address_id IS NULL) THEN
+            UPDATE member
+            SET 
+                res_address_id = p_address_id,
+                res_address_ts = now()
+            WHERE 
+                person_id = p_person_id;
+        ELSE
+            IF (p_address_id = v_rec.res_address_id) THEN
+                RETURN;
+            END IF;
+
+            UPDATE member
+            SET 
+                prev_res_address_id = v_rec.res_address_id,
+                prev_res_address_ts = v_rec.res_address_ts,
+                res_address_id = p_address_id,
+                res_address_ts = now()
+            WHERE 
+                person_id = p_person_id;
+        END IF;
+
+    END IF;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.member_set_address(p_is_mailing boolean, p_person_id integer, p_address_id integer) OWNER TO bmartin;
+
+--
+-- Name: member_set_primary_phone_email(integer, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION member_set_primary_phone_email(p_person_id integer, p_primary_phone character varying, p_primary_email character varying) RETURNS void
+    AS $$
+DECLARE
+    v_member     record;
+BEGIN
+
+    SELECT INTO v_member * FROM member WHERE person_id = p_person_id;
+
+    -------------
+    --  PHONE  --
+    -------------
+    IF (v_member.primary_phone_choice = 1  OR
+        (v_member.primary_phone_choice = 2 AND 
+         v_member.preferred_phone_employer IS NULL))  THEN
+
+        UPDATE member
+        SET
+          home_phone = p_primary_phone
+        WHERE
+          person_id = p_person_id;
+ 
+    ELSIF (v_member.primary_phone_choice = 2) THEN
+
+        UPDATE member_employment
+        SET
+          member_work_phone = p_primary_phone
+        WHERE
+          person_id = p_person_id  AND
+          employer_name = v_member.preferred_phone_employer;
+ 
+    ELSIF (v_member.primary_phone_choice = 3) THEN
+
+        UPDATE member
+        SET
+          cell_phone = p_primary_phone
+        WHERE
+          person_id = p_person_id;
+ 
+    END IF;
+
+    -------------
+    --  EMAIL  --
+    -------------
+    IF (v_member.primary_email_choice = 1  OR
+        (v_member.primary_email_choice = 2 AND 
+         v_member.preferred_email_employer IS NULL))  THEN
+
+        UPDATE member
+        SET
+          personal_email = p_primary_email
+        WHERE
+          person_id = p_person_id;
+ 
+    ELSIF (v_member.primary_email_choice = 2) THEN
+
+        UPDATE member_employment
+        SET
+          member_work_email = p_primary_email
+        WHERE
+          person_id = p_person_id  AND
+          employer_name = v_member.preferred_email_employer;
+ 
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.member_set_primary_phone_email(p_person_id integer, p_primary_phone character varying, p_primary_email character varying) OWNER TO bmartin;
+
+--
+-- Name: password_is_ok(character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION password_is_ok(p_login character varying, p_password character varying) RETURNS boolean
+    AS $$
+DECLARE
+    v_password varchar;
+    v_password_old varchar;
+    v_ts timestamp;
+BEGIN
+    SELECT INTO v_password, v_password_old
+        password, password_old
+        FROM app_user WHERE login = p_login;
+
+    IF  p_password = v_password  OR  p_password = v_password_old THEN
+        RETURN FALSE;
+    ELSE 
+        RETURN TRUE;
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.password_is_ok(p_login character varying, p_password character varying) OWNER TO bmartin;
+
+--
+-- Name: person_get_age_category(integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION person_get_age_category(p_person_id integer) RETURNS character
+    AS $$
+DECLARE
+    v_member record;
+    v_age_cat  char(1);
+BEGIN
+    SELECT into v_member  date_of_birth, age_category
+        FROM member
+        WHERE person_id = p_person_id;
+    IF FOUND THEN
+        SELECT into v_age_cat
+            calc_age_category(v_member.date_of_birth, v_member.age_category);
+    ELSE
+        v_age_cat := 'A';
+    END IF;
+
+    RETURN v_age_cat;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.person_get_age_category(p_person_id integer) OWNER TO bmartin;
+
+--
+-- Name: refresh_session(character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION refresh_session(p_session_id character varying) RETURNS void
+    AS $$
+BEGIN
+    PERFORM
+        s.session_id
+    FROM
+        app_session s
+    WHERE
+        s.session_id = p_session_id  AND
+        s.session_end_ts IS NULL;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Invalid Login/Password';
+    END IF;
+
+    PERFORM save_session_id(p_session_id);
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.refresh_session(p_session_id character varying) OWNER TO bmartin;
+
+--
+-- Name: reorder_emergency_contacts(integer, integer[]); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION reorder_emergency_contacts(p_person_id integer, p_rel_person_id_list integer[]) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+    FOR i IN 1..array_upper(p_person_id_list, 1) LOOP
+        UPDATE emergency_contact
+        SET contact_order_num = i
+        WHERE person_id = p_person_id  AND 
+              rel_person_id = p_rel_person_id_list[i];
+    END LOOP;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.reorder_emergency_contacts(p_person_id integer, p_rel_person_id_list integer[]) OWNER TO bmartin;
+
+--
+-- Name: save_session_id(character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION save_session_id(p_sess_id character varying) RETURNS void
+    AS $$
+BEGIN
+    CREATE TEMP TABLE session_id(sess_id varchar);
+    INSERT INTO session_id(sess_id) values(p_sess_id);
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.save_session_id(p_sess_id character varying) OWNER TO bmartin;
+
+--
+-- Name: session_is_superuser(); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION session_is_superuser() RETURNS boolean
+    AS $$
+BEGIN
+    PERFORM login from app_session where session_id = 
+        (SELECT current_sess_id()) and login is null;
+
+    RETURN FOUND;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.session_is_superuser() OWNER TO bmartin;
+
+--
+-- Name: update_address(integer, character varying, character varying, character varying, character, character varying, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_address(p_address_id integer, p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_postal character varying, p_country_code character) RETURNS void
+    AS $$
+BEGIN
+
+    UPDATE address
+    SET
+        address_1 = p_address_1,
+        address_2 = p_address_2,
+        city = p_city,
+        state_code = p_state_code,
+        zip_postal = p_zip_postal
+    WHERE address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_address(p_address_id integer, p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_postal character varying, p_country_code character) OWNER TO bmartin;
+
+--
+-- Name: update_app_user(character varying, character varying, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_app_user(p_login character varying, p_full_name character varying, p_email character varying, p_edit_errors_group_id integer) RETURNS void
+    AS $$
+BEGIN
+    UPDATE app_user 
+    SET
+        full_name = p_full_name,
+        email = p_email,
+        edit_errors_group_id = p_edit_errors_group_id,
+        update_ts = now()
+    WHERE login = p_login;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_app_user(p_login character varying, p_full_name character varying, p_email character varying, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: update_bahai_cluster(character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_bahai_cluster(p_cluster_code character varying, p_cluster_name character varying) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    UPDATE bahai_cluster
+    SET  cluster_name = p_cluster_name
+    WHERE cluster_code = p_cluster_code;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_bahai_cluster(p_cluster_code character varying, p_cluster_name character varying) OWNER TO bmartin;
+
+--
+-- Name: update_bahai_community(integer, character varying, character varying, character varying, character varying, boolean, character varying, integer, character varying, character varying, character varying, character varying, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_bahai_community(p_bahai_cmty_id integer, p_country_code character varying, p_bahai_cmty_code character varying, p_bahai_cmty_name character varying, p_time_zone character varying, p_is_lsa boolean, p_comm_website_url character varying, p_bc_address_id integer, p_bc_phone character varying, p_bc_fax character varying, p_bc_website_url character varying, p_bahai_cluster character varying, p_bahai_eu character varying, p_edit_errors_group_id integer) RETURNS integer
+    AS $$
+DECLARE
+BEGIN
+
+    UPDATE bahai_community
+    SET
+        country_code = p_country_code,
+        bahai_cmty_code = p_bahai_cmty_code,
+        bahai_cmty_name = p_bahai_cmty_name,
+        time_zone = p_time_zone,
+        is_lsa = p_is_lsa,
+        comm_website_url = p_comm_website_url,
+        bc_address_id = p_bc_address_id,
+        bc_phone = p_bc_phone,
+        bc_fax = p_bc_fax,
+        bc_website_url = p_bc_website_url,
+        bahai_cluster = p_bahai_cluster,
+        bahai_eu = p_bahai_eu,
+        edit_errors_group_id = p_edit_errors_group_id
+    WHERE
+        bahai_cmty_id = p_bahai_cmty_id;
+
+    RETURN 0;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_bahai_community(p_bahai_cmty_id integer, p_country_code character varying, p_bahai_cmty_code character varying, p_bahai_cmty_name character varying, p_time_zone character varying, p_is_lsa boolean, p_comm_website_url character varying, p_bc_address_id integer, p_bc_phone character varying, p_bc_fax character varying, p_bc_website_url character varying, p_bahai_cluster character varying, p_bahai_eu character varying, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: update_ca_address(integer, character varying, character varying, character varying, character, character varying, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_ca_address(p_address_id integer, p_address_1 character varying, p_address_2 character varying, p_municipality character varying, p_province_abbr character, p_postal_code character varying, p_country_code character) RETURNS void
+    AS $$
+BEGIN
+
+    UPDATE ca_address
+    SET
+        address_1 = p_address_1,
+        address_2 = p_address_2,
+        municipality = p_municipality,
+        province_abbr = p_province_abbr,
+        postal_code = p_postal_code
+    WHERE address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_ca_address(p_address_id integer, p_address_1 character varying, p_address_2 character varying, p_municipality character varying, p_province_abbr character, p_postal_code character varying, p_country_code character) OWNER TO bmartin;
+
+--
+-- Name: update_ca_location(integer, character, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_ca_location(p_bahai_cmty_id integer, p_province_abbr character, p_municipality character varying) RETURNS void
+    AS $$
+BEGIN
+
+    UPDATE ca_location
+    SET
+        bahai_cmty_id = p_bahai_cmty_id,
+        province_abbr = p_province_abbr,
+        municipality = p_municipality;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_ca_location(p_bahai_cmty_id integer, p_province_abbr character, p_municipality character varying) OWNER TO bmartin;
+
+--
+-- Name: update_employer_address(integer, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_employer_address(p_person_id integer, p_employer_name character varying, p_employer_addr_id integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    UPDATE member_employment
+    SET 
+        employer_addr_id = p_employer_addr_id
+    WHERE
+        person_id = p_person_id  AND  employer_name = p_employer_name;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_employer_address(p_person_id integer, p_employer_name character varying, p_employer_addr_id integer) OWNER TO bmartin;
+
+--
+-- Name: update_event(integer, character varying, integer, integer, timestamp without time zone, timestamp without time zone, integer, integer, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_event(p_event_id integer, p_event_type_code character varying, p_event_session integer, p_event_address_id integer, p_event_start_ts timestamp without time zone, p_event_end_ts timestamp without time zone, p_bahai_cmty_id integer, p_host_bahai_cmty_id integer, p_description character varying, p_notes character varying) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+    UPDATE event
+    SET
+        event_type_code = p_event_type_code,
+        event_session = p_event_session,
+        event_address_id = p_event_address_id,
+        event_start_ts = p_event_start_ts,
+        event_end_ts = p_event_end_ts,
+        bahai_cmty_id = p_bahai_cmty_id,
+        host_bahai_cmty_id = p_host_bahai_cmty_id,
+        description = p_description,
+        notes = p_notes
+    WHERE event_id = p_event_id;
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_event(p_event_id integer, p_event_type_code character varying, p_event_session integer, p_event_address_id integer, p_event_start_ts timestamp without time zone, p_event_end_ts timestamp without time zone, p_bahai_cmty_id integer, p_host_bahai_cmty_id integer, p_description character varying, p_notes character varying) OWNER TO bmartin;
+
+--
+-- Name: update_gb_address(integer, character varying, character varying, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_gb_address(p_address_id integer, p_address_1 character varying, p_building_name character varying, p_street_address character varying, p_locality character varying, p_post_town character varying, p_postcode character varying) RETURNS void
+    AS $$
+BEGIN
+
+    UPDATE gb_address
+    SET
+        address_1 = p_address_1,
+        building_name = p_building_name,
+        street_address = p_street_address,
+        locality = p_locality,
+        post_town = p_post_town,
+        postcode = p_postcode
+    WHERE
+        address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_gb_address(p_address_id integer, p_address_1 character varying, p_building_name character varying, p_street_address character varying, p_locality character varying, p_post_town character varying, p_postcode character varying) OWNER TO bmartin;
+
+--
+-- Name: update_gb_location(integer, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_gb_location(p_bahai_cmty_id integer, p_post_town character varying) RETURNS void
+    AS $$
+BEGIN
+
+    UPDATE gb_location
+    SET
+        post_town = p_post_town
+    WHERE
+        bahai_cmty_id = p_bahai_cmty_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_gb_location(p_bahai_cmty_id integer, p_post_town character varying) OWNER TO bmartin;
+
+--
+-- Name: update_medical_condition(integer, character varying, character varying, character varying, boolean); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_medical_condition(p_person_id integer, p_disease_condition character varying, p_medicine character varying, p_equipment character varying, p_require_power boolean) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    UPDATE medical_condition
+    SET
+        medicine = p_medicine,
+        equipment = p_equipment,
+        require_power = p_require_power
+    WHERE 
+        person_id = p_person_id  AND
+        disease_condition = p_disease_condition;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_medical_condition(p_person_id integer, p_disease_condition character varying, p_medicine character varying, p_equipment character varying, p_require_power boolean) OWNER TO bmartin;
+
+--
+-- Name: update_member(integer, character varying, character varying, boolean, character varying, character varying, date, date, character varying, boolean, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_member(p_person_id integer, p_last_name character varying, p_first_name character varying, p_is_male boolean, p_language character varying, p_language_2nd character varying, p_date_of_birth date, p_date_of_death date, p_occupation character varying, p_is_healthcare_provider boolean, p_edit_errors_group_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_person                  record;
+    v_edit_errors_group_id integer;
+BEGIN
+
+    SELECT into v_person *
+        FROM person 
+        WHERE person_id = p_person_id;
+
+    IF NOT (v_person.last_name = p_last_name  AND
+            v_person.first_name = p_first_name)  THEN
+
+       UPDATE person
+       SET
+           last_name = p_last_name,
+           first_name = p_first_name
+       WHERE person_id = p_person_id;
+
+    END IF;
+
+
+    ---------------------------------------------------------------
+    -- CLEAR out the old edit errors for this record
+    -- (from previous transaction).
+    ---------------------------------------------------------------
+    SELECT into v_edit_errors_group_id 
+        edit_errors_group_id
+        FROM member
+        WHERE person_id = p_person_id;
+
+    IF NOT v_edit_errors_group_id IS NULL THEN
+        PERFORM delete_edit_errors_group(v_edit_errors_group_id);
+    END IF;
+
+
+    UPDATE member
+    SET
+        last_name = p_last_name,
+        first_name = p_first_name,
+        is_male = p_is_male,
+        language = p_language,
+        language_2nd = p_language_2nd,
+        date_of_birth = p_date_of_birth,
+        date_of_death = p_date_of_death,
+        occupation = p_occupation,
+        is_healthcare_provider = p_is_healthcare_provider,
+        edit_errors_group_id = p_edit_errors_group_id
+    WHERE person_id = p_person_id;
+
+    PERFORM member_propagate_to_person(p_person_id);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_member(p_person_id integer, p_last_name character varying, p_first_name character varying, p_is_male boolean, p_language character varying, p_language_2nd character varying, p_date_of_birth date, p_date_of_death date, p_occupation character varying, p_is_healthcare_provider boolean, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: update_member_bahai(integer, character, character varying, date, boolean, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_member_bahai(p_person_id integer, p_bahai_id_country character, p_bahai_id character varying, p_date_became_bahai date, p_is_deprived boolean, p_age_category character) RETURNS void
+    AS $$
+DECLARE
+    v_member record;
+    v_person record;
+BEGIN
+
+    SELECT into v_member
+          bahai_id_country, bahai_id, date_became_bahai, is_deprived,
+          age_category
+        FROM member
+        WHERE person_id = p_person_id;
+
+    IF NOT (v_member.bahai_id_country = p_bahai_id_country  AND
+            v_member.bahai_id = p_bahai_id  AND
+            v_member.date_became_bahai = p_date_became_bahai  AND
+            v_member.is_deprived = p_is_deprived  AND
+            v_member.age_category = p_age_category)  THEN
+
+        UPDATE member
+        SET
+            bahai_id_country = p_bahai_id_country,
+            bahai_id = p_bahai_id,
+            date_became_bahai = p_date_became_bahai,
+            is_deprived = p_is_deprived,
+            age_category = p_age_category
+        WHERE person_id = p_person_id;
+
+        SELECT into v_person
+              bahai_id_country, bahai_id
+            FROM person
+            WHERE person_id = p_person_id;
+
+        IF NOT (v_person.bahai_id_country = p_bahai_id_country  AND
+                v_person.bahai_id = p_bahai_id)  THEN
+            UPDATE person
+            SET
+                bahai_id_country = p_bahai_id_country,
+                bahai_id = p_bahai_id
+            WHERE person_id = p_person_id;
+        END IF;
+
+        PERFORM member_propagate_to_person(p_person_id);
+
+    END IF;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_member_bahai(p_person_id integer, p_bahai_id_country character, p_bahai_id character varying, p_date_became_bahai date, p_is_deprived boolean, p_age_category character) OWNER TO bmartin;
+
+--
+-- Name: update_member_contact(integer, character varying, character varying, character varying, integer, integer, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_member_contact(p_person_id integer, p_home_phone character varying, p_cell_phone character varying, p_fax_phone character varying, p_primary_phone_choice integer, p_primary_email_choice integer, p_preferred_phone_employer character varying, p_preferred_email_employer character varying, p_personal_email character varying, p_personal_website_url character varying) RETURNS void
+    AS $$
+DECLARE
+    v_member                   record;
+    v_person                   record;
+    v_primary_phone_choice     integer;
+    v_primary_email_choice     integer;
+    v_primary_phone            varchar;
+    v_primary_email            varchar;
+
+BEGIN
+
+    -- 1=home, 2=work, 3=cell
+    IF p_primary_phone_choice IS NULL OR p_primary_phone_choice = 0  THEN
+        v_primary_phone_choice := 1;
+    ELSE
+        v_primary_phone_choice := p_primary_phone_choice;
+    END IF;
+
+    -- 1=personal, 2=work
+    IF p_primary_email_choice IS NULL OR p_primary_email_choice = 0  THEN
+        v_primary_email_choice := 1;
+    ELSE
+        v_primary_email_choice := p_primary_email_choice;
+    END IF;
+
+    SELECT INTO v_member
+        home_phone,
+        cell_phone,
+        fax_phone,
+        primary_phone_choice,
+        primary_email_choice,
+        preferred_phone_employer,
+        preferred_email_employer,
+        personal_email,
+        personal_website_url
+    FROM member
+    WHERE
+        person_id =            p_person_id;
+
+    IF p_home_phone = v_member.home_phone AND
+       p_cell_phone = v_member.cell_phone AND
+       p_fax_phone = v_member.fax_phone AND
+       v_primary_phone_choice = v_member.primary_phone_choice AND
+       v_primary_email_choice = v_member.primary_email_choice AND
+       p_preferred_phone_employer = v_member.preferred_phone_employer AND
+       p_preferred_email_employer = v_member.preferred_email_employer AND
+       p_personal_email = v_member.personal_email   AND
+       p_personal_website_url = v_member.personal_website_url    THEN
+
+        RETURN;
+
+    END IF;
+
+
+    UPDATE member
+    SET
+        person_id                 = p_person_id,
+        home_phone                = p_home_phone,
+        cell_phone                = p_cell_phone,
+        fax_phone                 = p_fax_phone,
+        primary_phone_choice      = v_primary_phone_choice,
+        primary_email_choice      = v_primary_email_choice,
+        preferred_phone_employer  = p_preferred_phone_employer,
+        preferred_email_employer  = p_preferred_email_employer,
+        personal_email            = p_personal_email,
+        personal_website_url      = p_personal_website_url
+    WHERE
+        person_id =            p_person_id;
+
+    PERFORM member_propagate_to_person(p_person_id);
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_member_contact(p_person_id integer, p_home_phone character varying, p_cell_phone character varying, p_fax_phone character varying, p_primary_phone_choice integer, p_primary_email_choice integer, p_preferred_phone_employer character varying, p_preferred_email_employer character varying, p_personal_email character varying, p_personal_website_url character varying) OWNER TO bmartin;
+
+--
+-- Name: update_member_employment(integer, character varying, character varying, character varying, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_member_employment(p_person_id integer, p_employer_name character varying, p_employer_phone character varying, p_member_work_phone character varying, p_member_work_email character varying) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+
+    UPDATE member_employment
+    SET 
+        employer_phone = p_employer_phone,
+        member_work_phone = p_member_work_phone,
+        member_work_email = p_member_work_email 
+    WHERE
+        person_id = p_person_id  AND  employer_name = p_employer_name;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_member_employment(p_person_id integer, p_employer_name character varying, p_employer_phone character varying, p_member_work_phone character varying, p_member_work_email character varying) OWNER TO bmartin;
+
+--
+-- Name: update_member_legal(integer, character varying, character varying, character varying, character varying, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_member_legal(p_person_id integer, p_location_of_will character varying, p_attorney_name character varying, p_attorney_firm character varying, p_attorney_phone character varying, p_attorney_email character varying, p_attorney_address_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_location_of_will         varchar;
+    v_attorney_name            varchar; 
+    v_attorney_firm            varchar; 
+    v_attorney_phone           varchar; 
+    v_attorney_email           varchar; 
+    v_attorney_address_id      integer;
+BEGIN
+
+    SELECT into
+        v_location_of_will,
+        v_attorney_name,
+        v_attorney_firm,
+        v_attorney_phone,
+        v_attorney_email,
+        v_attorney_address_id
+
+        location_of_will,
+        attorney_name,
+        attorney_firm,
+        attorney_phone,
+        attorney_email,
+        attorney_address_id
+    FROM member
+    WHERE
+        person_id = p_person_id;
+
+
+    IF p_location_of_will = v_location_of_will  AND
+        p_attorney_name = v_attorney_name  AND
+        p_attorney_firm = v_attorney_firm  AND
+        p_attorney_phone = v_attorney_phone  AND
+        p_attorney_email = v_attorney_email  AND
+        (p_attorney_address_id = v_attorney_address_id OR 
+         (p_attorney_address_id IS NULL AND v_attorney_address_id IS NULL)) 
+            THEN
+
+        RETURN;
+    END IF;
+
+
+    UPDATE member  
+    SET
+        location_of_will     = p_location_of_will,
+        attorney_name        = p_attorney_name,
+        attorney_firm        = p_attorney_firm,
+        attorney_phone       = p_attorney_phone,
+        attorney_email       = p_attorney_email,
+        attorney_address_id  = p_attorney_address_id
+    WHERE
+        person_id = p_person_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_member_legal(p_person_id integer, p_location_of_will character varying, p_attorney_name character varying, p_attorney_firm character varying, p_attorney_phone character varying, p_attorney_email character varying, p_attorney_address_id integer) OWNER TO bmartin;
+
+--
+-- Name: update_person(integer, smallint, character varying, character varying, character varying, character varying, integer, character, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_person(p_person_id integer, p_person_category smallint, p_last_name character varying, p_first_name character varying, p_primary_phone character varying, p_primary_email character varying, p_contact_address_id integer, p_bahai_id_country character, p_bahai_id character varying, p_edit_errors_group_id integer) RETURNS void
+    AS $$
+DECLARE
+    v_person     record;
+BEGIN
+
+    SELECT into v_person * FROM person where person_id = p_person_id;
+
+    IF (v_person.person_category = 1 AND p_person_category <> 1) THEN
+        PERFORM delete_member(p_person_id);
+    END IF;
+
+    IF (v_person.person_category <> 1 AND p_person_category = 1) THEN
+        SELECT into v_person * FROM person WHERE person_id = p_person_id;
+
+        PERFORM insert_update_member_stub(
+            p_person_id,
+            v_person.bahai_cmty_id,
+            p_last_name,
+            p_first_name,
+            p_bahai_id_country,
+            p_bahai_id,
+            p_primary_phone,
+            p_primary_email,
+            p_contact_address_id);
+
+    END IF;
+    
+
+    UPDATE person
+    SET
+        person_category = p_person_category,
+        last_name = p_last_name,
+        first_name = p_first_name,
+        primary_phone = p_primary_phone,
+        primary_email = p_primary_email,
+        contact_address_id = p_contact_address_id,
+        bahai_id_country = p_bahai_id_country,
+        bahai_id = p_bahai_id,
+        edit_errors_group_id = p_edit_errors_group_id
+    WHERE 
+        person_id = p_person_id;
+      
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_person(p_person_id integer, p_person_category smallint, p_last_name character varying, p_first_name character varying, p_primary_phone character varying, p_primary_email character varying, p_contact_address_id integer, p_bahai_id_country character, p_bahai_id character varying, p_edit_errors_group_id integer) OWNER TO bmartin;
+
+--
+-- Name: update_us_address(integer, character varying, character varying, character varying, character, character varying, character); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_us_address(p_address_id integer, p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_code character varying, p_country_code character) RETURNS void
+    AS $$
+BEGIN
+
+    UPDATE us_address
+    SET
+        address_1 = p_address_1,
+        address_2 = p_address_2,
+        city = p_city,
+        state_code = p_state_code,
+        zip_code = p_zip_code
+    WHERE address_id = p_address_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_us_address(p_address_id integer, p_address_1 character varying, p_address_2 character varying, p_city character varying, p_state_code character, p_zip_code character varying, p_country_code character) OWNER TO bmartin;
+
+--
+-- Name: update_us_location(integer, character, character varying); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_us_location(p_bahai_cmty_id integer, p_state_code character, p_city character varying) RETURNS void
+    AS $$
+BEGIN
+
+    UPDATE us_location
+    SET
+        state_code = p_state_code,
+        city = p_city
+    WHERE
+        bahai_cmty_id = p_bahai_cmty_id;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_us_location(p_bahai_cmty_id integer, p_state_code character, p_city character varying) OWNER TO bmartin;
+
+--
+-- Name: update_website(character varying, integer, character varying, integer); Type: FUNCTION; Schema: public; Owner: bmartin
+--
+
+CREATE FUNCTION update_website(p_website_url character varying, p_webmaster integer, p_hosting_company character varying, p_host_company_addr integer) RETURNS void
+    AS $$
+DECLARE
+BEGIN
+    
+    UPDATE website
+      SET
+        website_url = p_website_url,
+        webmaster = p_webmaster,
+        hosting_company = p_hosting_company,
+        host_company_addr = p_host_company_addr
+    WHERE 
+        website_url = p_website_url;
+
+END;
+$$
+    LANGUAGE plpgsql;
+
+
+ALTER FUNCTION public.update_website(p_website_url character varying, p_webmaster integer, p_hosting_company character varying, p_host_company_addr integer) OWNER TO bmartin;
+
+--
+-- Name: address_id_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE address_id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.address_id_seq OWNER TO bmartin;
+
+--
+-- Name: address_id_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('address_id_seq', 9, true);
+
+
+SET default_tablespace = '';
+
+SET default_with_oids = false;
+
+--
+-- Name: address; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE address (
+    address_id integer DEFAULT nextval('address_id_seq'::regclass) NOT NULL,
+    address_1 character varying,
+    address_2 character varying,
+    city character varying,
+    state_code character(2),
+    zip_postal character varying,
+    country_code character(2),
+    remarks character varying
+);
+
+
+ALTER TABLE public.address OWNER TO bmartin;
+
+--
+-- Name: admin; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE "admin" (
+    id integer NOT NULL,
+    version character varying,
+    version_ts timestamp without time zone,
+    remarks character varying
+);
+
+
+ALTER TABLE public."admin" OWNER TO bmartin;
+
+--
+-- Name: app_session; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE app_session (
+    session_id character varying NOT NULL,
+    session_start_ts timestamp without time zone DEFAULT now(),
+    session_end_ts timestamp without time zone,
+    "login" character varying
+);
+
+
+ALTER TABLE public.app_session OWNER TO bmartin;
+
+--
+-- Name: app_user; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE app_user (
+    "login" character varying NOT NULL,
+    "password" character varying NOT NULL,
+    password_old character varying,
+    bahai_cmty_id integer NOT NULL,
+    created_by character varying,
+    full_name character varying,
+    email character varying,
+    update_ts timestamp without time zone,
+    password_change_ts timestamp without time zone,
+    remarks character varying,
+    edit_errors_group_id integer,
+    CONSTRAINT app_user_login_check CHECK ((NOT (("login")::text = 'select login from superuser'::text)))
+);
+
+
+ALTER TABLE public.app_user OWNER TO bmartin;
+
+--
+-- Name: change_log; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE change_log (
+    ts timestamp without time zone DEFAULT now(),
+    table_name character varying,
+    row_key character varying,
+    section character varying,
+    trans_type character(1),
+    session_id character varying,
+    CONSTRAINT change_log_trans_type_check CHECK ((((trans_type = 'I'::bpchar) OR (trans_type = 'U'::bpchar)) OR (trans_type = 'D'::bpchar)))
+);
+
+
+ALTER TABLE public.change_log OWNER TO bmartin;
+
+--
+-- Name: app_user_creator; Type: VIEW; Schema: public; Owner: bmartin
+--
+
+CREATE VIEW app_user_creator AS
+    SELECT au."login", as1."login" AS creator FROM ((app_user au LEFT JOIN change_log ch ON (((((au."login")::text = (ch.row_key)::text) AND ((ch.table_name)::text = 'app_user'::text)) AND (ch.trans_type = 'I'::bpchar)))) LEFT JOIN app_session as1 ON (((as1.session_id)::text = (ch.session_id)::text)));
+
+
+ALTER TABLE public.app_user_creator OWNER TO bmartin;
+
+--
+-- Name: app_user_mods; Type: VIEW; Schema: public; Owner: bmartin
+--
+
+CREATE VIEW app_user_mods AS
+    SELECT au."login", ch1.ts AS create_ts, as1."login" AS create_user, au.update_ts, as2."login" AS update_user, au.password_change_ts, as3."login" AS password_change_user FROM ((((((app_user au LEFT JOIN change_log ch1 ON (((((au."login")::text = (ch1.row_key)::text) AND ((ch1.table_name)::text = 'app_user'::text)) AND (ch1.trans_type = 'I'::bpchar)))) LEFT JOIN app_session as1 ON (((as1.session_id)::text = (ch1.session_id)::text))) LEFT JOIN change_log ch2 ON ((au.update_ts = ch2.ts))) LEFT JOIN app_session as2 ON (((as2.session_id)::text = (ch2.session_id)::text))) LEFT JOIN change_log ch3 ON ((au.password_change_ts = ch3.ts))) LEFT JOIN app_session as3 ON (((as3.session_id)::text = (ch3.session_id)::text)));
+
+
+ALTER TABLE public.app_user_mods OWNER TO bmartin;
+
+--
+-- Name: app_user_privilege; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE app_user_privilege (
+    "login" character varying NOT NULL,
+    "domain" character varying NOT NULL,
+    privilege_level smallint DEFAULT 0
+);
+
+
+ALTER TABLE public.app_user_privilege OWNER TO bmartin;
+
+--
+-- Name: atc_member; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE atc_member (
+    cluster_code character varying NOT NULL,
+    person_id integer NOT NULL
+);
+
+
+ALTER TABLE public.atc_member OWNER TO bmartin;
+
+--
+-- Name: bahai_cluster; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE bahai_cluster (
+    cluster_code character varying NOT NULL,
+    cluster_name character varying,
+    region character varying,
+    remarks character varying,
+    edit_errors_group_id integer
+);
+
+
+ALTER TABLE public.bahai_cluster OWNER TO bmartin;
+
+--
+-- Name: bahai_cmty_id_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE bahai_cmty_id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.bahai_cmty_id_seq OWNER TO bmartin;
+
+--
+-- Name: bahai_cmty_id_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('bahai_cmty_id_seq', 6, true);
+
+
+--
+-- Name: bahai_community; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE bahai_community (
+    bahai_cmty_id integer DEFAULT nextval('bahai_cmty_id_seq'::regclass) NOT NULL,
+    country_code character(2) NOT NULL,
+    bahai_cmty_code character varying NOT NULL,
+    bahai_cmty_name character varying NOT NULL,
+    time_zone character varying,
+    is_lsa boolean DEFAULT true,
+    comm_website_url character varying,
+    bc_address_id integer,
+    bc_phone character varying,
+    bc_fax character varying,
+    bc_website_url character varying,
+    bahai_cluster character varying,
+    bahai_eu character varying,
+    remarks character varying,
+    edit_errors_group_id integer
+);
+
+
+ALTER TABLE public.bahai_community OWNER TO bmartin;
+
+--
+-- Name: bahai_eu; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE bahai_eu (
+    bahai_eu_code character varying,
+    bahai_eu_name character varying,
+    region character varying,
+    remarks character varying
+);
+
+
+ALTER TABLE public.bahai_eu OWNER TO bmartin;
+
+--
+-- Name: ca_address; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE ca_address (
+    address_id integer DEFAULT nextval('address_id_seq'::regclass) NOT NULL,
+    address_1 character varying,
+    address_2 character varying,
+    municipality character varying,
+    province_abbr character(2),
+    postal_code character varying,
+    country_code character(2)
+);
+
+
+ALTER TABLE public.ca_address OWNER TO bmartin;
+
+--
+-- Name: ca_location; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE ca_location (
+    bahai_cmty_id integer NOT NULL,
+    province_abbr character(2),
+    municipality character varying
+);
+
+
+ALTER TABLE public.ca_location OWNER TO bmartin;
+
+--
+-- Name: country_display_order_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE country_display_order_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.country_display_order_seq OWNER TO bmartin;
+
+--
+-- Name: country_display_order_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('country_display_order_seq', 239, true);
+
+
+--
+-- Name: country; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE country (
+    country_code character(2) NOT NULL,
+    country_name character varying NOT NULL,
+    display_order integer DEFAULT nextval('country_display_order_seq'::regclass)
+);
+
+
+ALTER TABLE public.country OWNER TO bmartin;
+
+--
+-- Name: db_error_id_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE db_error_id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.db_error_id_seq OWNER TO bmartin;
+
+--
+-- Name: db_error_id_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('db_error_id_seq', 18, true);
+
+
+--
+-- Name: db_error_log; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE db_error_log (
+    db_error_id integer NOT NULL,
+    ts timestamp without time zone DEFAULT now(),
+    query character varying,
+    error_msg character varying
+);
+
+
+ALTER TABLE public.db_error_log OWNER TO bmartin;
+
+--
+-- Name: edit_error; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE edit_error (
+    edit_errors_group_id integer NOT NULL,
+    edit_error_num integer NOT NULL,
+    message character varying,
+    context character varying
+);
+
+
+ALTER TABLE public.edit_error OWNER TO bmartin;
+
+--
+-- Name: edit_errors_group; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE edit_errors_group (
+    edit_errors_group_id integer NOT NULL,
+    session_id character varying,
+    datatype character varying,
+    row_descriptor character varying
+);
+
+
+ALTER TABLE public.edit_errors_group OWNER TO bmartin;
+
+--
+-- Name: edit_errors_group_id_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE edit_errors_group_id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.edit_errors_group_id_seq OWNER TO bmartin;
+
+--
+-- Name: edit_errors_group_id_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('edit_errors_group_id_seq', 2, true);
+
+
+--
+-- Name: emergency_contact; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE emergency_contact (
+    person_id integer,
+    rel_person_id integer,
+    relationship character varying,
+    contact_order_num smallint
+);
+
+
+ALTER TABLE public.emergency_contact OWNER TO bmartin;
+
+--
+-- Name: event; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE event (
+    event_id integer NOT NULL,
+    event_type_code character varying,
+    event_session integer,
+    event_address_id integer,
+    event_start_ts timestamp without time zone,
+    event_end_ts timestamp without time zone,
+    bahai_cmty_id integer,
+    host_bahai_cmty_id integer,
+    description character varying,
+    notes character varying,
+    remarks character varying,
+    edit_errors_group_id integer
+);
+
+
+ALTER TABLE public.event OWNER TO bmartin;
+
+--
+-- Name: event_counts; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE event_counts (
+    event_id integer NOT NULL,
+    num_bahai_adults smallint,
+    num_bahai_youths smallint,
+    num_bahai_juniors smallint,
+    num_bahai_children smallint,
+    num_non_bahai_adults smallint,
+    num_non_bahai_youths smallint,
+    num_non_bahai_juniors smallint,
+    num_non_bahai_children smallint,
+    num_new_non_bahai_adults smallint,
+    num_new_non_bahai_youths smallint,
+    num_new_non_bahai_juniors smallint,
+    num_new_non_bahai_children smallint
+);
+
+
+ALTER TABLE public.event_counts OWNER TO bmartin;
+
+--
+-- Name: event_notice; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE event_notice (
+    event_id integer NOT NULL,
+    event_notice_ts timestamp without time zone DEFAULT now() NOT NULL,
+    event_notice_type character varying,
+    event_notice_text character varying
+);
+
+
+ALTER TABLE public.event_notice OWNER TO bmartin;
+
+--
+-- Name: event_person; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE event_person (
+    event_id integer NOT NULL,
+    person_id integer NOT NULL,
+    "role" character varying,
+    follow_up boolean DEFAULT false,
+    follow_up_ts timestamp without time zone,
+    follow_up_action character varying,
+    remarks character varying
+);
+
+
+ALTER TABLE public.event_person OWNER TO bmartin;
+
+--
+-- Name: event_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE event_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.event_seq OWNER TO bmartin;
+
+--
+-- Name: event_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('event_seq', 3, true);
+
+
+--
+-- Name: event_type; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE event_type (
+    display_order smallint,
+    event_type_code character varying NOT NULL,
+    full_label character varying,
+    optgroup character varying
+);
+
+
+ALTER TABLE public.event_type OWNER TO bmartin;
+
+--
+-- Name: feedback; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE feedback (
+    ts timestamp without time zone DEFAULT now() NOT NULL,
+    "login" character varying NOT NULL,
+    feedback_text character varying
+);
+
+
+ALTER TABLE public.feedback OWNER TO bmartin;
+
+--
+-- Name: gb_address; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE gb_address (
+    address_id integer NOT NULL,
+    address_1 character varying,
+    building_name character varying,
+    street_address character varying,
+    locality character varying,
+    post_town character varying,
+    postcode character varying
+);
+
+
+ALTER TABLE public.gb_address OWNER TO bmartin;
+
+--
+-- Name: gb_location; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE gb_location (
+    bahai_cmty_id integer NOT NULL,
+    post_town character varying
+);
+
+
+ALTER TABLE public.gb_location OWNER TO bmartin;
+
+--
+-- Name: healthcare_prov_id_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE healthcare_prov_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.healthcare_prov_id_seq OWNER TO bmartin;
+
+--
+-- Name: healthcare_prov_id_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('healthcare_prov_id_seq', 1, false);
+
+
+--
+-- Name: healthcare_provider; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE healthcare_provider (
+    healthcare_prov_id integer DEFAULT nextval('healthcare_prov_id_seq'::regclass) NOT NULL,
+    person_id integer,
+    npid character varying,
+    professional_type character varying,
+    practice_group character varying
+);
+
+
+ALTER TABLE public.healthcare_provider OWNER TO bmartin;
+
+--
+-- Name: lsa_info; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE lsa_info (
+    bahai_cmty_id integer NOT NULL,
+    lsa_secretary integer,
+    lsa_treasurer integer,
+    lsa_member_1 integer,
+    lsa_member_2 integer,
+    lsa_member_3 integer,
+    lsa_member_4 integer,
+    lsa_member_5 integer,
+    lsa_member_6 integer,
+    lsa_member_7 integer,
+    lsa_member_8 integer,
+    lsa_member_9 integer,
+    lsa_address integer,
+    lsa_phone character varying,
+    lsa_fax character varying,
+    lsa_email character varying
+);
+
+
+ALTER TABLE public.lsa_info OWNER TO bmartin;
+
+--
+-- Name: lsa_service; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE lsa_service (
+    bahai_cmty_id integer NOT NULL,
+    person_id integer NOT NULL,
+    start_of_service timestamp without time zone NOT NULL,
+    end_of_service timestamp without time zone,
+    served_as character varying DEFAULT 'Member'::character varying,
+    remarks character varying
+);
+
+
+ALTER TABLE public.lsa_service OWNER TO bmartin;
+
+--
+-- Name: medical_condition; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE medical_condition (
+    person_id integer NOT NULL,
+    disease_condition character varying NOT NULL,
+    medicine character varying,
+    equipment character varying,
+    require_power boolean DEFAULT false,
+    remarks character varying
+);
+
+
+ALTER TABLE public.medical_condition OWNER TO bmartin;
+
+--
+-- Name: member; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE member (
+    person_id integer NOT NULL,
+    last_name character varying NOT NULL,
+    first_name character varying NOT NULL,
+    is_male boolean,
+    "language" character varying,
+    language_2nd character varying,
+    date_of_birth date,
+    date_of_death date,
+    home_phone character varying,
+    cell_phone character varying,
+    fax_phone character varying,
+    primary_phone_choice smallint,
+    primary_email_choice smallint,
+    personal_email character varying,
+    personal_website_url character varying,
+    preferred_phone_employer character varying,
+    preferred_email_employer character varying,
+    res_address_id integer,
+    res_address_ts timestamp without time zone,
+    prev_res_address_id integer,
+    prev_res_address_ts timestamp without time zone,
+    mailing_address_id integer,
+    mailing_address_ts timestamp without time zone,
+    prev_mailing_address_id integer,
+    prev_mailing_address_ts timestamp without time zone,
+    bahai_cmty_id integer,
+    bahai_id_country character(2) DEFAULT 'US'::bpchar,
+    bahai_id character varying,
+    date_became_bahai date,
+    is_deprived boolean,
+    age_category character(1),
+    location_of_will character varying,
+    attorney_name character varying,
+    attorney_firm character varying,
+    attorney_phone character varying,
+    attorney_email character varying,
+    attorney_address_id integer,
+    occupation character varying,
+    is_healthcare_provider boolean,
+    section_updated character varying,
+    remarks character varying,
+    edit_errors_group_id integer
+);
+
+
+ALTER TABLE public.member OWNER TO bmartin;
+
+--
+-- Name: member_employment; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE member_employment (
+    person_id integer NOT NULL,
+    employer_name character varying NOT NULL,
+    employer_addr_id integer,
+    employer_phone character varying,
+    member_work_phone character varying,
+    member_work_email character varying
+);
+
+
+ALTER TABLE public.member_employment OWNER TO bmartin;
+
+--
+-- Name: member_health; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE member_health (
+    person_id integer NOT NULL,
+    primary_provider integer
+);
+
+
+ALTER TABLE public.member_health OWNER TO bmartin;
+
+--
+-- Name: member_healthcare_provider; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE member_healthcare_provider (
+    person_id integer NOT NULL,
+    healthcare_provider_id integer NOT NULL
+);
+
+
+ALTER TABLE public.member_healthcare_provider OWNER TO bmartin;
+
+--
+-- Name: person_id_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE person_id_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.person_id_seq OWNER TO bmartin;
+
+--
+-- Name: person_id_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('person_id_seq', 7, true);
+
+
+--
+-- Name: person; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE person (
+    person_id integer DEFAULT nextval('person_id_seq'::regclass) NOT NULL,
+    bahai_cmty_id integer NOT NULL,
+    person_category smallint DEFAULT 1,
+    last_name character varying NOT NULL,
+    first_name character varying NOT NULL,
+    primary_phone character varying,
+    primary_email character varying,
+    contact_address_id integer,
+    bahai_id_country character(2) DEFAULT 'US'::bpchar,
+    bahai_id character varying,
+    edit_errors_group_id integer
+);
+
+
+ALTER TABLE public.person OWNER TO bmartin;
+
+--
+-- Name: person_category_label; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE person_category_label (
+    person_category smallint NOT NULL,
+    label character varying
+);
+
+
+ALTER TABLE public.person_category_label OWNER TO bmartin;
+
+--
+-- Name: person_label; Type: VIEW; Schema: public; Owner: bmartin
+--
+
+CREATE VIEW person_label AS
+    SELECT person.person_id, ((((((((person.last_name)::text || ', '::text) || (person.first_name)::text) || '  ('::text) || (bahai_community.bahai_cmty_code)::text) || ' : '::text) || (person_category_label.label)::text) || ')'::text) AS label FROM person, person_category_label, bahai_community WHERE ((person.person_category = person_category_label.person_category) AND (bahai_community.bahai_cmty_id = person.bahai_cmty_id));
+
+
+ALTER TABLE public.person_label OWNER TO bmartin;
+
+--
+-- Name: state_display_order_seq; Type: SEQUENCE; Schema: public; Owner: bmartin
+--
+
+CREATE SEQUENCE state_display_order_seq
+    INCREMENT BY 1
+    NO MAXVALUE
+    NO MINVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.state_display_order_seq OWNER TO bmartin;
+
+--
+-- Name: state_display_order_seq; Type: SEQUENCE SET; Schema: public; Owner: bmartin
+--
+
+SELECT pg_catalog.setval('state_display_order_seq', 61, true);
+
+
+--
+-- Name: state; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE state (
+    state_code character(2) NOT NULL,
+    state_name character varying NOT NULL,
+    display_order integer DEFAULT nextval('state_display_order_seq'::regclass)
+);
+
+
+ALTER TABLE public.state OWNER TO bmartin;
+
+--
+-- Name: superuser; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE "superuser" (
+    "login" character varying DEFAULT 'superuser'::character varying NOT NULL,
+    "password" character varying DEFAULT md5('verbus'::text) NOT NULL,
+    CONSTRAINT superuser_login_check CHECK ((("login")::text = 'superuser'::text))
+);
+
+
+ALTER TABLE public."superuser" OWNER TO bmartin;
+
+--
+-- Name: us_address; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE us_address (
+    address_id integer DEFAULT nextval('address_id_seq'::regclass) NOT NULL,
+    address_1 character varying,
+    address_2 character varying,
+    city character varying,
+    state_code character(2),
+    zip_code character varying,
+    country_code character(2)
+);
+
+
+ALTER TABLE public.us_address OWNER TO bmartin;
+
+--
+-- Name: us_location; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE us_location (
+    bahai_cmty_id integer NOT NULL,
+    state_code character(2),
+    city character varying
+);
+
+
+ALTER TABLE public.us_location OWNER TO bmartin;
+
+--
+-- Name: website; Type: TABLE; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+CREATE TABLE website (
+    website_url character varying NOT NULL,
+    webmaster integer,
+    hosting_company character varying,
+    host_company_addr integer
+);
+
+
+ALTER TABLE public.website OWNER TO bmartin;
+
+--
+-- Data for Name: address; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY address (address_id, address_1, address_2, city, state_code, zip_postal, country_code, remarks) FROM stdin;
+\.
+
+
+--
+-- Data for Name: admin; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY "admin" (id, version, version_ts, remarks) FROM stdin;
+1	Version 0.3	2007-06-17 21:29:42.212291	\N
+\.
+
+
+--
+-- Data for Name: app_session; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY app_session (session_id, session_start_ts, session_end_ts, "login") FROM stdin;
+45cbfe32ed5feaaf589d05232dd6cf64	2007-06-17 21:30:15.076268	\N	\N
+94a7ad57b7f76319e45ef282526c004b	2007-06-17 21:33:49.05334	\N	powerful
+74e58291a0416bcd0adcc78656981fb4	2007-06-17 22:22:44.826508	\N	powerful
+9b777d9601f51ecd5ee1f490000e2ef9	2007-06-17 22:22:59.221473	\N	\N
+a0ac80ab20695c105585ff0499381a89	2007-06-17 22:32:28.066373	\N	powerful
+7a288f61aec12131dbe5d394979df7fe	2007-06-17 22:32:42.858154	\N	powerful
+2ec881a447deba77868b0f8e1cf1e190	2007-06-17 22:33:01.658273	\N	\N
+de94dd18e10d57f1b0284d224e2d6c0c	2007-06-17 22:34:04.154081	\N	cap
+c12d81d14d2f832fea8d40be385beada	2007-06-18 13:52:07.027074	\N	\N
+c2bbb3d1d88f2c0c94f4255ae1e1e563	2007-06-18 14:00:43.58768	\N	gb_pow
+32ef6efb7854e2bca3643b2a46549b67	2007-06-18 15:44:08.213019	\N	gb_pow
+91c283498bf1f54b01b583cb07ec001f	2007-06-18 15:44:29.172286	\N	gb_pow
+7798c7f9225a456a407b8776a027cc63	2007-06-18 16:15:35.395071	\N	\N
+b83a1aeac2c3f8ca9d095aa6fa23de82	2007-06-18 16:16:37.027889	\N	gb_pow
+721a1cb46e50c567fefd5c6e8bf6f9a2	2007-06-18 16:17:57.126621	\N	powerful
+c7c2582c4f339cd10f6c12b499f391aa	2007-06-18 16:19:04.306823	\N	\N
+db9341b91d50e5fb365dd754a94b45eb	2007-06-18 16:32:45.506145	\N	powerful
+84ca0060016bdaf1b4f866dc8aeae0b3	2007-06-18 16:45:26.451114	\N	gb_pow
+9e1c0e1cf1083c5b2a8b3af4221632d8	2007-06-18 19:30:07.830219	\N	gb_pow
+\.
+
+
+--
+-- Data for Name: app_user; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY app_user ("login", "password", password_old, bahai_cmty_id, created_by, full_name, email, update_ts, password_change_ts, remarks, edit_errors_group_id) FROM stdin;
+powerful	900150983cd24fb0d6963f7d28e17f72	\N	1	\N	Can do anything	power@abc.com	\N	\N	\N	\N
+cap	900150983cd24fb0d6963f7d28e17f72	\N	4	\N	powerful Canadian user	cap@yahoo.com	\N	\N	\N	\N
+gb_pow	900150983cd24fb0d6963f7d28e17f72	\N	5	\N	powerful in GB	gb_pow@yahoo.com	\N	\N	\N	\N
+\.
+
+
+--
+-- Data for Name: app_user_privilege; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY app_user_privilege ("login", "domain", privilege_level) FROM stdin;
+powerful	app_user	2
+powerful	person	2
+powerful	event	2
+cap	app_user	2
+cap	person	2
+cap	event	2
+gb_pow	app_user	2
+gb_pow	person	2
+gb_pow	event	2
+\.
+
+
+--
+-- Data for Name: atc_member; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY atc_member (cluster_code, person_id) FROM stdin;
+\.
+
+
+--
+-- Data for Name: bahai_cluster; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY bahai_cluster (cluster_code, cluster_name, region, remarks, edit_errors_group_id) FROM stdin;
+clust1	cluster #1	\N	\N	\N
+\.
+
+
+--
+-- Data for Name: bahai_community; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY bahai_community (bahai_cmty_id, country_code, bahai_cmty_code, bahai_cmty_name, time_zone, is_lsa, comm_website_url, bc_address_id, bc_phone, bc_fax, bc_website_url, bahai_cluster, bahai_eu, remarks, edit_errors_group_id) FROM stdin;
+1	US	loc1	test location #1	America/New_York	f		\N				clust1		\N	\N
+2	CA	ca_test	test loc in Canada	America/Toronto	f		\N				clust1		\N	\N
+4	CA	ca_test_3	test loc in Canada	America/Toronto	f		\N				clust1		\N	\N
+6	US	tz_test	testing tz	America/New_York	f		\N				clust1		\N	\N
+5	GB	gb_loc1	UK test 	Europe/London	f		\N				clust1		\N	\N
+\.
+
+
+--
+-- Data for Name: bahai_eu; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY bahai_eu (bahai_eu_code, bahai_eu_name, region, remarks) FROM stdin;
+\.
+
+
+--
+-- Data for Name: ca_address; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY ca_address (address_id, address_1, address_2, municipality, province_abbr, postal_code, country_code) FROM stdin;
+4	432 Rue de la Rive		Quebec	QC	QE jkljkl	CA
+5	89234 La Meme Rue		Windsor	ON	ON djkljkl	CA
+\.
+
+
+--
+-- Data for Name: ca_location; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY ca_location (bahai_cmty_id, province_abbr, municipality) FROM stdin;
+4	ON	Toronto
+\.
+
+
+--
+-- Data for Name: change_log; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY change_log (ts, table_name, row_key, section, trans_type, session_id) FROM stdin;
+2007-06-17 21:30:53.50664	bahai_community	1	\N	I	45cbfe32ed5feaaf589d05232dd6cf64
+2007-06-17 21:32:09.44143	app_user	powerful	\N	I	45cbfe32ed5feaaf589d05232dd6cf64
+2007-06-17 21:45:07.39122	us_address	1	\N	I	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 21:45:34.364661	us_address	1	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:01:44.211121	member	2	\N	I	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:01:44.217825	member	2	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:01:44.225748	us_address	2	\N	I	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:01:44.242523	member	2	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:01:44.245236	member	2	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:01:44.276571	member	2	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:02:32.052936	member	2	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:02:32.072974	member	2	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:03:27.906439	member	2	\N	U	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:03:27.935187	us_address	3	\N	I	94a7ad57b7f76319e45ef282526c004b
+2007-06-17 22:26:12.780558	bahai_community	2	\N	I	9b777d9601f51ecd5ee1f490000e2ef9
+2007-06-17 22:28:27.604245	bahai_community	3	\N	I	9b777d9601f51ecd5ee1f490000e2ef9
+2007-06-17 22:29:56.366309	bahai_community	3	\N	U	9b777d9601f51ecd5ee1f490000e2ef9
+2007-06-17 22:30:13.991392	bahai_community	3	\N	U	9b777d9601f51ecd5ee1f490000e2ef9
+2007-06-17 22:30:58.646316	bahai_community	3	\N	D	9b777d9601f51ecd5ee1f490000e2ef9
+2007-06-17 22:31:48.873538	bahai_community	4	\N	I	9b777d9601f51ecd5ee1f490000e2ef9
+2007-06-17 22:33:50.30934	app_user	cap	\N	I	2ec881a447deba77868b0f8e1cf1e190
+2007-06-17 22:35:17.639052	member	3	\N	I	de94dd18e10d57f1b0284d224e2d6c0c
+2007-06-17 22:35:17.6883	member	3	\N	U	de94dd18e10d57f1b0284d224e2d6c0c
+2007-06-17 22:35:17.695382	ca_address	4	\N	I	de94dd18e10d57f1b0284d224e2d6c0c
+2007-06-17 22:35:17.699358	member	3	\N	U	de94dd18e10d57f1b0284d224e2d6c0c
+2007-06-17 22:35:17.702399	member	3	\N	U	de94dd18e10d57f1b0284d224e2d6c0c
+2007-06-17 22:35:17.704287	member	3	\N	U	de94dd18e10d57f1b0284d224e2d6c0c
+2007-06-17 22:36:29.870558	ca_address	5	\N	I	de94dd18e10d57f1b0284d224e2d6c0c
+2007-06-18 13:59:38.08141	bahai_community	5	\N	I	c12d81d14d2f832fea8d40be385beada
+2007-06-18 14:00:28.179772	app_user	gb_pow	\N	I	c12d81d14d2f832fea8d40be385beada
+2007-06-18 14:01:16.17512	member	5	\N	I	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 14:01:16.194304	member	5	\N	U	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 14:01:16.201496	member	5	\N	U	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 14:02:19.978593	member	5	\N	U	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 14:02:19.990859	member	5	\N	U	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 14:04:05.69174	member	5	\N	U	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 14:04:05.724023	member	5	\N	U	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 14:04:05.726793	member	5	\N	U	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 15:59:02.800109	member	6	\N	I	c2bbb3d1d88f2c0c94f4255ae1e1e563
+2007-06-18 16:16:16.650596	bahai_community	5	\N	U	7798c7f9225a456a407b8776a027cc63
+2007-06-18 16:19:50.091651	bahai_community	6	\N	I	c7c2582c4f339cd10f6c12b499f391aa
+2007-06-18 16:25:32.45636	bahai_community	5	\N	U	c7c2582c4f339cd10f6c12b499f391aa
+2007-06-18 21:58:38.528747	member	5	\N	U	9e1c0e1cf1083c5b2a8b3af4221632d8
+\.
+
+
+--
+-- Data for Name: country; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY country (country_code, country_name, display_order) FROM stdin;
+US	UNITED STATES	1
+AF	AFGHANISTAN	2
+AX	ALAND ISLANDS	3
+DZ	ALGERIA	4
+AS	AMERICAN SAMOA	5
+AD	ANDORRA	6
+AO	ANGOLA	7
+AI	ANGUILLA	8
+AQ	ANTARCTICA	9
+AG	ANTIGUA AND BARBUDA	10
+AR	ARGENTINA	11
+AM	ARMENIA	12
+AW	ARUBA	13
+AU	AUSTRALIA	14
+AT	AUSTRIA	15
+AZ	AZERBAIJAN	16
+BS	BAHAMAS	17
+BH	BAHRAIN	18
+BD	BANGLADESH	19
+BB	BARBADOS	20
+BY	BELARUS	21
+BE	BELGIUM	22
+BZ	BELIZE	23
+BJ	BENIN	24
+BM	BERMUDA	25
+BT	BHUTAN	26
+BO	BOLIVIA	27
+BA	BOSNIA AND HERZEGOVINA	28
+BW	BOTSWANA	29
+BV	BOUVET ISLAND	30
+BR	BRAZIL	31
+IO	BRITISH INDIAN OCEAN TERR.	32
+BN	BRUNEI DARUSSALAM	33
+BG	BULGARIA	34
+BF	BURKINA FASO	35
+BI	BURUNDI	36
+KH	CAMBODIA	37
+CM	CAMEROON	38
+CA	CANADA	39
+CV	CAPE VERDE	40
+KY	CAYMAN ISLANDS	41
+CF	CENTRAL AFRICAN REPUBLIC	42
+TD	CHAD	43
+CL	CHILE	44
+CN	CHINA	45
+CX	CHRISTMAS ISLAND	46
+CC	COCOS (KEELING) ISLANDS	47
+CO	COLOMBIA	48
+KM	COMOROS	49
+CG	CONGO	50
+CD	CONGO, DEMOCRATIC REPUBLIC OF	51
+CK	COOK ISLANDS	52
+CR	COSTA RICA	53
+CI	COTE DIVOIRE	54
+HR	CROATIA	55
+CU	CUBA	56
+CY	CYPRUS	57
+CZ	CZECH REPUBLIC	58
+DK	DENMARK	59
+DJ	DJIBOUTI	60
+DM	DOMINICA	61
+DO	DOMINICAN REPUBLIC	62
+EC	ECUADOR	63
+EG	EGYPT	64
+SV	EL SALVADOR	65
+GQ	EQUATORIAL GUINEA	66
+ER	ERITREA	67
+EE	ESTONIA	68
+ET	ETHIOPIA	69
+FK	FALKLAND ISLANDS (MALVINAS)	70
+FO	FAROE ISLANDS	71
+FJ	FIJI	72
+FI	FINLAND	73
+FR	FRANCE	74
+GF	FRENCH GUIANA	75
+PF	FRENCH POLYNESIA	76
+TF	FRENCH SOUTHERN TERRITORIES	77
+GA	GABON	78
+GM	GAMBIA	79
+GE	GEORGIA	80
+DE	GERMANY	81
+GH	GHANA	82
+GI	GIBRALTAR	83
+GR	GREECE	84
+GL	GREENLAND	85
+GD	GRENADA	86
+GP	GUADELOUPE	87
+GU	GUAM	88
+GT	GUATEMALA	89
+GN	GUINEA	90
+GW	GUINEA-BISSAU	91
+GY	GUYANA	92
+HT	HAITI	93
+HM	HEARD ISLAND AND MCDONALD ISL	94
+VA	VATICAN CITY	95
+HN	HONDURAS	96
+HK	HONG KONG	97
+HU	HUNGARY	98
+IS	ICELAND	99
+IN	INDIA	100
+ID	INDONESIA	101
+IR	IRAN, ISLAMIC REPUBLIC OF	102
+IQ	IRAQ	103
+IE	IRELAND	104
+IL	ISRAEL	105
+IT	ITALY	106
+JM	JAMAICA	107
+JP	JAPAN	108
+JO	JORDAN	109
+KZ	KAZAKHSTAN	110
+KE	KENYA	111
+KI	KIRIBATI	112
+KP	KOREA, DEMOCRATIC PEOPLES REP.	113
+KR	KOREA, REPUBLIC OF	114
+KW	KUWAIT	115
+KG	KYRGYZSTAN	116
+LA	LAO PEOPLES DEMOCRATIC REPUB	117
+LV	LATVIA	118
+LB	LEBANON	119
+LS	LESOTHO	120
+LR	LIBERIA	121
+LY	LIBYAN ARAB JAMAHIRIYA	122
+LI	LIECHTENSTEIN	123
+LT	LITHUANIA	124
+LU	LUXEMBOURG	125
+MO	MACAO	126
+MK	MACEDONIA, FORMER YUGOSLAV REP.	127
+MG	MADAGASCAR	128
+MW	MALAWI	129
+MY	MALAYSIA	130
+MV	MALDIVES	131
+ML	MALI	132
+MT	MALTA	133
+MH	MARSHALL ISLANDS	134
+MQ	MARTINIQUE	135
+MR	MAURITANIA	136
+MU	MAURITIUS	137
+YT	MAYOTTE	138
+MX	MEXICO	139
+FM	MICRONESIA, FED. STATES OF	140
+MD	MOLDOVA, REPUBLIC OF	141
+MC	MONACO	142
+MN	MONGOLIA	143
+MS	MONTSERRAT	144
+MA	MOROCCO	145
+MZ	MOZAMBIQUE	146
+MM	MYANMAR	147
+NA	NAMIBIA	148
+NR	NAURU	149
+NP	NEPAL	150
+NL	NETHERLANDS	151
+AN	NETHERLANDS ANTILLES	152
+NC	NEW CALEDONIA	153
+NZ	NEW ZEALAND	154
+NI	NICARAGUA	155
+NE	NIGER	156
+NG	NIGERIA	157
+NU	NIUE	158
+NF	NORFOLK ISLAND	159
+MP	NORTHERN MARIANA ISLANDS	160
+NO	NORWAY	161
+OM	OMAN	162
+PK	PAKISTAN	163
+PW	PALAU	164
+PS	PALESTINIAN TERRITORY, OCCUP	165
+PA	PANAMA	166
+PG	PAPUA NEW GUINEA	167
+PY	PARAGUAY	168
+PE	PERU	169
+PH	PHILIPPINES	170
+PN	PITCAIRN	171
+PL	POLAND	172
+PT	PORTUGAL	173
+PR	PUERTO RICO	174
+QA	QATAR	175
+RE	REUNION	176
+RO	ROMANIA	177
+RU	RUSSIAN FEDERATION	178
+RW	RWANDA	179
+SH	SAINT HELENA	180
+KN	SAINT KITTS AND NEVIS	181
+LC	SAINT LUCIA	182
+PM	SAINT PIERRE AND MIQUELON	183
+VC	SAINT VINCENT AND GRENADINES	184
+WS	SAMOA	185
+SM	SAN MARINO	186
+ST	SAO TOME AND PRINCIPE	187
+SA	SAUDI ARABIA	188
+SN	SENEGAL	189
+CS	SERBIA AND MONTENEGRO	190
+SC	SEYCHELLES	191
+SL	SIERRA LEONE	192
+SG	SINGAPORE	193
+SK	SLOVAKIA	194
+SI	SLOVENIA	195
+SB	SOLOMON ISLANDS	196
+SO	SOMALIA	197
+ZA	SOUTH AFRICA	198
+GS	S. GEORGIA AND S. SANDWICH ISL.	199
+ES	SPAIN	200
+LK	SRI LANKA	201
+SD	SUDAN	202
+SR	SURINAME	203
+SJ	SVALBARD AND JAN MAYEN	204
+SZ	SWAZILAND	205
+SE	SWEDEN	206
+CH	SWITZERLAND	207
+SY	SYRIAN ARAB REPUBLIC	208
+TW	TAIWAN, PROVINCE OF CHINA	209
+TJ	TAJIKISTAN	210
+TZ	TANZANIA, UNITED REPUBLIC OF	211
+TH	THAILAND	212
+TL	TIMOR-LESTE	213
+TG	TOGO	214
+TK	TOKELAU	215
+TO	TONGA	216
+TT	TRINIDAD AND TOBAGO	217
+TN	TUNISIA	218
+TR	TURKEY	219
+TM	TURKMENISTAN	220
+TC	TURKS AND CAICOS ISLANDS	221
+TV	TUVALU	222
+UG	UGANDA	223
+UA	UKRAINE	224
+AE	UNITED ARAB EMIRATES	225
+GB	UNITED KINGDOM	226
+UM	U.S. MINOR OUTLYING ISLANDS	227
+UY	URUGUAY	228
+UZ	UZBEKISTAN	229
+VU	VANUATU	230
+VE	VENEZUELA	231
+VN	VIET NAM	232
+VG	VIRGIN ISLANDS, BRITISH	233
+VI	VIRGIN ISLANDS, U.S.	234
+WF	WALLIS AND FUTUNA	235
+EH	WESTERN SAHARA	236
+YE	YEMEN	237
+ZM	ZAMBIA	238
+ZW	ZIMBABWE 	239
+\.
+
+
+--
+-- Data for Name: db_error_log; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY db_error_log (db_error_id, ts, query, error_msg) FROM stdin;
+1	2007-06-17 22:26:12.786716	SELECT insert_ca_location(2,'ON','Toronto');	ERROR:  function insert_ca_location(integer, "unknown", "unknown") does not exist\nHINT:  No function matches the given name and argument types. You may need to add explicit type casts.
+2	2007-06-17 22:29:21.418007	SELECT update_ca_location(3,'ON','Thunder Bay');	ERROR:  column "province_abbr" of relation "ca_location" does not exist\nCONTEXT:  SQL statement "UPDATE ca_location SET bahai_cmty_id =  $1 , province_abbr =  $2 , municipality =  $3 "\nPL/pgSQL function "update_ca_location" line 3 at SQL statement
+3	2007-06-18 14:02:19.995674	SELECT insert_gb_address('Acme Inc.','Acme Industrial Building','22 Fox Boulevard','','Somethingsford','LO 83939');	ERROR:  function insert_gb_address("unknown", "unknown", "unknown", "unknown", "unknown", "unknown") does not exist\nHINT:  No function matches the given name and argument types. You may need to add explicit type casts.
+4	2007-06-18 19:20:03.224812	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  relation "event_type" does not exist
+5	2007-06-18 19:20:59.407134	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  relation "event_type" does not exist
+6	2007-06-18 19:21:33.904834	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  relation "event_type" does not exist
+7	2007-06-18 19:23:59.281773	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+8	2007-06-18 19:24:50.313654	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+9	2007-06-18 19:25:18.299332	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+10	2007-06-18 19:26:43.72711	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+11	2007-06-18 19:27:49.310224	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+12	2007-06-18 19:28:33.234064	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+13	2007-06-18 19:29:00.103846	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+14	2007-06-18 19:30:13.154871	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+15	2007-06-18 19:30:45.649774	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+16	2007-06-18 19:31:17.314063	SELECT event_type_key,full_label FROM event_type ORDER BY display_order;	ERROR:  permission denied for relation event_type
+17	2007-06-18 19:32:25.927487	SELECT event_id FROM event WHERE event_type = 'HNawR' ORDER BY event_start_ts;	ERROR:  column "event_type" does not exist
+18	2007-06-18 19:34:01.943077	SELECT event_id FROM event WHERE event_type_key = 'HNawR' ORDER BY event_start_ts;	ERROR:  column "event_type_key" does not exist
+\.
+
+
+--
+-- Data for Name: edit_error; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY edit_error (edit_errors_group_id, edit_error_num, message, context) FROM stdin;
+\.
+
+
+--
+-- Data for Name: edit_errors_group; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY edit_errors_group (edit_errors_group_id, session_id, datatype, row_descriptor) FROM stdin;
+\.
+
+
+--
+-- Data for Name: emergency_contact; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY emergency_contact (person_id, rel_person_id, relationship, contact_order_num) FROM stdin;
+\.
+
+
+--
+-- Data for Name: event; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY event (event_id, event_type_code, event_session, event_address_id, event_start_ts, event_end_ts, bahai_cmty_id, host_bahai_cmty_id, description, notes, remarks, edit_errors_group_id) FROM stdin;
+1	AsMtg	\N	7	2007-06-18 00:00:00	2007-06-18 00:00:00	5	\N	Test event description.\r\n		\N	\N
+2	AsMtg	\N	8	2007-06-19 00:00:00	2007-06-20 00:00:00	5	\N	JUst a test.		\N	\N
+3	Devot	\N	9	2007-06-19 00:00:00	2007-06-19 00:00:00	5	\N			\N	\N
+\.
+
+
+--
+-- Data for Name: event_counts; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY event_counts (event_id, num_bahai_adults, num_bahai_youths, num_bahai_juniors, num_bahai_children, num_non_bahai_adults, num_non_bahai_youths, num_non_bahai_juniors, num_non_bahai_children, num_new_non_bahai_adults, num_new_non_bahai_youths, num_new_non_bahai_juniors, num_new_non_bahai_children) FROM stdin;
+3	15	5	4	1	8	0	0	0	0	0	2	0
+\.
+
+
+--
+-- Data for Name: event_notice; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY event_notice (event_id, event_notice_ts, event_notice_type, event_notice_text) FROM stdin;
+\.
+
+
+--
+-- Data for Name: event_person; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY event_person (event_id, person_id, "role", follow_up, follow_up_ts, follow_up_action, remarks) FROM stdin;
+1	6	attendee	f	\N		\N
+1	5	attendee	f	\N		\N
+2	6	attendee	f	\N		\N
+2	5	attendee	f	\N		\N
+2	7	attendee	f	\N		\N
+\.
+
+
+--
+-- Data for Name: event_type; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY event_type (display_order, event_type_code, full_label, optgroup) FROM stdin;
+1	HNawR	Holy Day - Naw-R&uacute;z	Holy Day
+2	HFR01	Holy Day - Festival of Ridvan - First	Holy Day
+3	HFR09	Holy Day - Festival of Ridvan - Ninth	Holy Day
+4	HFR12	Holy Day - Festival of Ridvan - Twelfth	Holy Day
+5	HDecB	Holy Day - Declaration of the B&aacute;b	Holy Day
+6	HascB	Holy Day - Ascension of Bah&aacute;'u'll&aacute;h	Holy Day
+7	HMarB	Holy Day - Martyrdom of the B&aacute;b	Holy Day
+8	HBirB	Holy Day - Birth of the B&aacute;b	Holy Day
+9	HAscA	Holy Day - Ascension of 'Abdu'l-Bah&aacute;	Holy Day
+10	HBirU	Holy Day - Birth of Bah&aacute;'u'll&aacute;h	Holy Day
+11	HDCov	Holy Day - Day of the Covenant	Holy Day
+12	HAyiH	Holy Day - Ayy&aacute;m-i-H&aacute; (Intercalary Days)	Holy Day
+13	AsMtg	Assembly Meeting	
+14	ChCls	Children's Class	
+15	Convn	Convention	
+16	Devot	Devotional	
+17	Deepg	Deeping	
+18	F0321	Feast of Bah&aacute; - Splendour - March 21	Feast
+19	F0409	Feast of Jal&aacute;l - Glory - April 9	Feast
+20	F0428	Feast of Jam&aacute;l - Beauty - April 28	Feast
+21	F0517	Feast of 'Azamat - Grandeur - May 17	Feast
+22	F0605	Feast of N&uacute;r - Light - June 5	Feast
+23	F0624	Feast of Rahmat - Mercy - June 24	Feast
+24	F0713	Feast of Kalim&aacute;t - Words - July 13	Feast
+25	F0801	Feast of Kam&aacute;l - Perfection - August 1	Feast
+26	F0820	Feast of Asm&aacute;' - Names - August 20	Feast
+27	F0908	Feast of 'Izzat - Might - September 8	Feast
+28	F0927	Feast of Mashíyyat - Will - September 27	Feast
+29	F1016	Feast of 'Ilm - Knowledge - October 16	Feast
+30	F1104	Feast of Qudrat - Power - November 4	Feast
+31	F1123	Feast of Qawl - Speech - November 23	Feast
+32	F1212	Feast of Mas&aacute;'il - Questions - December 12	Feast
+33	F1231	Feast of <U>Sh</U>araf - Honour - December 31	Feast
+34	F0119	Feast of Sult&aacute;n - Sovereignty - January 19	Feast
+35	F0207	Feast of Mulk - Dominion - February 7	Feast
+36	F0302	Feast of 'Al&aacute; - Loftiness - March 2	Feast
+37	Fires	Fireside	
+38	HomeV	Home Visit	
+39	PhCal	Phone Call	
+40	RaceU	Race Unity Day	
+41	RefGa	Reflections Gathering	
+42	Stdy1	Study Circle - Ruhi Book 1	Study Circle
+43	Stdy2	Study Circle - Ruhi Book 2	Study Circle
+44	Stdy3	Study Circle - Ruhi Book 3	Study Circle
+45	StdyA	Study Circle - Ruhi Book 3A	Study Circle
+46	Stdy4	Study Circle - Ruhi Book 4	Study Circle
+47	Stdy5	Study Circle - Ruhi Book 5	Study Circle
+48	Stdy6	Study Circle - Ruhi Book 6	Study Circle
+49	Stdy7	Study Circle - Ruhi Book 7	Study Circle
+50	WrldR	World Religion Day	
+51	Other	Other	
+\.
+
+
+--
+-- Data for Name: feedback; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY feedback (ts, "login", feedback_text) FROM stdin;
+\.
+
+
+--
+-- Data for Name: gb_address; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY gb_address (address_id, address_1, building_name, street_address, locality, post_town, postcode) FROM stdin;
+6	Acme Inc.	Acme Industrial Building	22 Fox Boulevard		Somethingsford	LO 83939
+7	Again	Coffman Building	123 Temple Lane	Other side of tracks	Brattleborough	PC 234
+8	ANother place					
+9	Common Room	Figgy Hall	141 Willow Road		Cambridge	sdfjksdkf
+\.
+
+
+--
+-- Data for Name: gb_location; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY gb_location (bahai_cmty_id, post_town) FROM stdin;
+5	London
+\.
+
+
+--
+-- Data for Name: healthcare_provider; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY healthcare_provider (healthcare_prov_id, person_id, npid, professional_type, practice_group) FROM stdin;
+\.
+
+
+--
+-- Data for Name: lsa_info; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY lsa_info (bahai_cmty_id, lsa_secretary, lsa_treasurer, lsa_member_1, lsa_member_2, lsa_member_3, lsa_member_4, lsa_member_5, lsa_member_6, lsa_member_7, lsa_member_8, lsa_member_9, lsa_address, lsa_phone, lsa_fax, lsa_email) FROM stdin;
+\.
+
+
+--
+-- Data for Name: lsa_service; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY lsa_service (bahai_cmty_id, person_id, start_of_service, end_of_service, served_as, remarks) FROM stdin;
+\.
+
+
+--
+-- Data for Name: medical_condition; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY medical_condition (person_id, disease_condition, medicine, equipment, require_power, remarks) FROM stdin;
+\.
+
+
+--
+-- Data for Name: member; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY member (person_id, last_name, first_name, is_male, "language", language_2nd, date_of_birth, date_of_death, home_phone, cell_phone, fax_phone, primary_phone_choice, primary_email_choice, personal_email, personal_website_url, preferred_phone_employer, preferred_email_employer, res_address_id, res_address_ts, prev_res_address_id, prev_res_address_ts, mailing_address_id, mailing_address_ts, prev_mailing_address_id, prev_mailing_address_ts, bahai_cmty_id, bahai_id_country, bahai_id, date_became_bahai, is_deprived, age_category, location_of_will, attorney_name, attorney_firm, attorney_phone, attorney_email, attorney_address_id, occupation, is_healthcare_provider, section_updated, remarks, edit_errors_group_id) FROM stdin;
+2	Bush	George	t	english		\N	\N	787-0987			1	1					2	2007-06-17 22:01:44.242523	\N	\N	2	2007-06-17 22:01:44.245236	\N	\N	1	US		\N	\N	\N						\N		\N	\N	\N	\N
+3	Trudeau	Pierre	t	french		\N	\N	987-0987			1	1					4	2007-06-17 22:35:17.699358	\N	\N	4	2007-06-17 22:35:17.702399	\N	\N	4	US		\N	\N	\N						\N		\N	\N	\N	\N
+6	Jones	Mama	\N	\N	\N	\N	\N	999-9999	\N	\N	1	1		\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	5	  		\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N	\N
+5	Smith	Geoffrey	t	english		1995-01-01	\N	980098887			1	1					6	2007-06-18 14:04:05.724023	\N	\N	6	2007-06-18 14:04:05.726793	\N	\N	5	US		\N	\N	\N						\N		\N	\N	\N	\N
+\.
+
+
+--
+-- Data for Name: member_employment; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY member_employment (person_id, employer_name, employer_addr_id, employer_phone, member_work_phone, member_work_email) FROM stdin;
+2	Target Stores	3			
+\.
+
+
+--
+-- Data for Name: member_health; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY member_health (person_id, primary_provider) FROM stdin;
+\.
+
+
+--
+-- Data for Name: member_healthcare_provider; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY member_healthcare_provider (person_id, healthcare_provider_id) FROM stdin;
+\.
+
+
+--
+-- Data for Name: person; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY person (person_id, bahai_cmty_id, person_category, last_name, first_name, primary_phone, primary_email, contact_address_id, bahai_id_country, bahai_id, edit_errors_group_id) FROM stdin;
+1	1	4	Dumpty	Humpty	123-4567	joe@schmo.com	1	  		\N
+2	1	1	Bush	George	787-0987		\N	US		1
+3	4	1	Trudeau	Pierre	987-0987		\N	US		\N
+4	4	4	Poussant	Jean Pierre			5	  		\N
+6	5	1	Jones	Mama	999-9999		\N	  		\N
+7	5	2	Gabor	Ja Ja			\N	  		\N
+5	5	1	Smith	Geoffrey	980098887		\N	US		2
+\.
+
+
+--
+-- Data for Name: person_category_label; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY person_category_label (person_category, label) FROM stdin;
+1	member
+2	guest
+3	seeker
+4	external
+\.
+
+
+--
+-- Data for Name: state; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY state (state_code, state_name, display_order) FROM stdin;
+AL	ALABAMA	1
+AK	ALASKA	2
+AS	AMERICAN SAMOA	3
+AZ	ARIZONA	4
+AR	ARKANSAS	5
+CA	CALIFORNIA	6
+CO	COLORADO	7
+CT	CONNECTICUT	8
+DE	DELAWARE	9
+DC	DISTRICT OF COLUMBIA	10
+FM	FEDERATED STATES OF MICRONESIA	11
+FL	FLORIDA	12
+GA	GEORGIA	13
+GU	GUAM	14
+HI	HAWAII	15
+ID	IDAHO	16
+IL	ILLINOIS	17
+IN	INDIANA	18
+IA	IOWA	19
+KS	KANSAS	20
+LA	LOUISIANA	21
+ME	MAINE	22
+MH	MARSHALL ISLANDS	23
+MD	MARYLAND	24
+MA	MASSACHUSETTS	25
+MI	MICHIGAN	26
+MN	MINNESOTA	27
+MS	MISSISSIPPI	28
+MO	MISSOURI	29
+MT	MONTANA	30
+NE	NEBRASKA	31
+NV	NEVADA	32
+NH	NEW HAMPSHIRE	33
+NJ	NEW JERSEY	34
+NM	NEW MEXICO	35
+NY	NEW YORK	36
+NC	NORTH CAROLINA	37
+ND	NORTH DAKOTA	38
+MP	NORTHERN MARIANA ISLANDS	39
+OH	OHIO	40
+OK	OKLAHOMA	41
+OR	OREGON	42
+PW	PALAU	43
+PA	PENNSYLVANIA	44
+PR	PUERTO RICO	45
+RI	RHODE ISLAND	46
+SC	SOUTH CAROLINA	47
+SD	SOUTH DAKOTA	48
+TN	TENNESSEE	49
+TX	TEXAS	50
+UT	UTAH	51
+VT	VERMONT	52
+VI	VIRGIN ISLANDS	53
+VA	VIRGINIA	54
+WA	WASHINGTON	55
+WV	WEST VIRGINIA	56
+WI	WISCONSIN	57
+WY	WYOMING	58
+AE	Arm Frc Afr/Canada/Eur/MidEast	59
+AA	Armed Forces Americas	60
+AP	Armed Forces Pacific	61
+\.
+
+
+--
+-- Data for Name: superuser; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY "superuser" ("login", "password") FROM stdin;
+superuser	98213d83a8046d7f2fe4d9bc1da87139
+\.
+
+
+--
+-- Data for Name: us_address; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY us_address (address_id, address_1, address_2, city, state_code, zip_code, country_code) FROM stdin;
+1	123 Rocky Road		Philadelphia	PA	45454	US
+2	141 Linux Blvd		Portland	OR	89898	US
+3	987 Pine Grove		Chicago	IL	45454	US
+\.
+
+
+--
+-- Data for Name: us_location; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY us_location (bahai_cmty_id, state_code, city) FROM stdin;
+1	CA	Davis
+6	CT	
+\.
+
+
+--
+-- Data for Name: website; Type: TABLE DATA; Schema: public; Owner: bmartin
+--
+
+COPY website (website_url, webmaster, hosting_company, host_company_addr) FROM stdin;
+\.
+
+
+--
+-- Name: admin_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY "admin"
+    ADD CONSTRAINT admin_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: app_session_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY app_session
+    ADD CONSTRAINT app_session_pkey PRIMARY KEY (session_id);
+
+
+--
+-- Name: app_user_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY app_user
+    ADD CONSTRAINT app_user_pkey PRIMARY KEY ("login");
+
+
+--
+-- Name: app_user_privilege_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY app_user_privilege
+    ADD CONSTRAINT app_user_privilege_pkey PRIMARY KEY ("login", "domain");
+
+
+--
+-- Name: atc_member_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY atc_member
+    ADD CONSTRAINT atc_member_pkey PRIMARY KEY (cluster_code, person_id);
+
+
+--
+-- Name: bahai_cluster_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY bahai_cluster
+    ADD CONSTRAINT bahai_cluster_pkey PRIMARY KEY (cluster_code);
+
+
+--
+-- Name: bahai_community_country_code_key; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY bahai_community
+    ADD CONSTRAINT bahai_community_country_code_key UNIQUE (country_code, bahai_cmty_code);
+
+
+--
+-- Name: bahai_community_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY bahai_community
+    ADD CONSTRAINT bahai_community_pkey PRIMARY KEY (bahai_cmty_id);
+
+
+--
+-- Name: ca_location_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY ca_location
+    ADD CONSTRAINT ca_location_pkey PRIMARY KEY (bahai_cmty_id);
+
+
+--
+-- Name: country_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY country
+    ADD CONSTRAINT country_pkey PRIMARY KEY (country_code);
+
+
+--
+-- Name: db_error_log_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY db_error_log
+    ADD CONSTRAINT db_error_log_pkey PRIMARY KEY (db_error_id);
+
+
+--
+-- Name: edit_error_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY edit_error
+    ADD CONSTRAINT edit_error_pkey PRIMARY KEY (edit_errors_group_id, edit_error_num);
+
+
+--
+-- Name: edit_errors_group_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY edit_errors_group
+    ADD CONSTRAINT edit_errors_group_pkey PRIMARY KEY (edit_errors_group_id);
+
+
+--
+-- Name: event_counts_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY event_counts
+    ADD CONSTRAINT event_counts_pkey PRIMARY KEY (event_id);
+
+
+--
+-- Name: event_notice_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY event_notice
+    ADD CONSTRAINT event_notice_pkey PRIMARY KEY (event_id, event_notice_ts);
+
+
+--
+-- Name: event_person_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY event_person
+    ADD CONSTRAINT event_person_pkey PRIMARY KEY (event_id, person_id);
+
+
+--
+-- Name: event_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY event
+    ADD CONSTRAINT event_pkey PRIMARY KEY (event_id);
+
+
+--
+-- Name: event_type_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY event_type
+    ADD CONSTRAINT event_type_pkey PRIMARY KEY (event_type_code);
+
+
+--
+-- Name: feedback_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY feedback
+    ADD CONSTRAINT feedback_pkey PRIMARY KEY (ts, "login");
+
+
+--
+-- Name: gb_address_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY gb_address
+    ADD CONSTRAINT gb_address_pkey PRIMARY KEY (address_id);
+
+
+--
+-- Name: gb_location_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY gb_location
+    ADD CONSTRAINT gb_location_pkey PRIMARY KEY (bahai_cmty_id);
+
+
+--
+-- Name: healthcare_provider_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY healthcare_provider
+    ADD CONSTRAINT healthcare_provider_pkey PRIMARY KEY (healthcare_prov_id);
+
+
+--
+-- Name: lsa_info_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY lsa_info
+    ADD CONSTRAINT lsa_info_pkey PRIMARY KEY (bahai_cmty_id);
+
+
+--
+-- Name: lsa_service_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY lsa_service
+    ADD CONSTRAINT lsa_service_pkey PRIMARY KEY (bahai_cmty_id, person_id, start_of_service);
+
+
+--
+-- Name: medical_condition_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY medical_condition
+    ADD CONSTRAINT medical_condition_pkey PRIMARY KEY (person_id, disease_condition);
+
+
+--
+-- Name: member_employment_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY member_employment
+    ADD CONSTRAINT member_employment_pkey PRIMARY KEY (person_id, employer_name);
+
+
+--
+-- Name: member_health_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY member_health
+    ADD CONSTRAINT member_health_pkey PRIMARY KEY (person_id);
+
+
+--
+-- Name: member_healthcare_provider_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY member_healthcare_provider
+    ADD CONSTRAINT member_healthcare_provider_pkey PRIMARY KEY (person_id, healthcare_provider_id);
+
+
+--
+-- Name: member_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY member
+    ADD CONSTRAINT member_pkey PRIMARY KEY (person_id);
+
+
+--
+-- Name: person_bahai_cmty_id_key; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY person
+    ADD CONSTRAINT person_bahai_cmty_id_key UNIQUE (bahai_cmty_id, first_name, last_name);
+
+
+--
+-- Name: person_category_label_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY person_category_label
+    ADD CONSTRAINT person_category_label_pkey PRIMARY KEY (person_category);
+
+
+--
+-- Name: person_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY person
+    ADD CONSTRAINT person_pkey PRIMARY KEY (person_id);
+
+
+--
+-- Name: state_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY state
+    ADD CONSTRAINT state_pkey PRIMARY KEY (state_code);
+
+
+--
+-- Name: superuser_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY "superuser"
+    ADD CONSTRAINT superuser_pkey PRIMARY KEY ("login");
+
+
+--
+-- Name: us_location_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY us_location
+    ADD CONSTRAINT us_location_pkey PRIMARY KEY (bahai_cmty_id);
+
+
+--
+-- Name: website_pkey; Type: CONSTRAINT; Schema: public; Owner: bmartin; Tablespace: 
+--
+
+ALTER TABLE ONLY website
+    ADD CONSTRAINT website_pkey PRIMARY KEY (website_url);
+
+
+--
+-- Name: address_delete_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE address_delete_rule AS ON DELETE TO address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'address'::character varying, old.address_id, 'D'::bpchar);
+
+
+--
+-- Name: address_insert_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE address_insert_rule AS ON INSERT TO address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'address'::character varying, new.address_id, 'I'::bpchar);
+
+
+--
+-- Name: address_update_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE address_update_rule AS ON UPDATE TO address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'address'::character varying, old.address_id, 'U'::bpchar);
+
+
+--
+-- Name: app_user_delete_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE app_user_delete_rule AS ON DELETE TO app_user DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'app_user'::character varying, old."login", 'D'::bpchar);
+
+
+--
+-- Name: app_user_insert_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE app_user_insert_rule AS ON INSERT TO app_user DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'app_user'::character varying, new."login", 'I'::bpchar);
+
+
+--
+-- Name: app_user_password_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE app_user_password_rule AS ON UPDATE TO app_user WHERE (new.update_ts = old.update_ts) DO INSERT INTO change_log (session_id, table_name, row_key, trans_type, ts) VALUES ((SELECT current_sess_id() AS current_sess_id), 'app_user'::character varying, new."login", 'U'::bpchar, new.password_change_ts);
+
+
+--
+-- Name: app_user_update_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE app_user_update_rule AS ON UPDATE TO app_user WHERE ((new.update_ts IS NOT NULL) AND ((old.update_ts IS NULL) OR (new.update_ts <> old.update_ts))) DO INSERT INTO change_log (session_id, table_name, row_key, trans_type, ts) VALUES ((SELECT current_sess_id() AS current_sess_id), 'app_user'::character varying, new."login", 'U'::bpchar, new.update_ts);
+
+
+--
+-- Name: bahai_community_delete_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE bahai_community_delete_rule AS ON DELETE TO bahai_community DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'bahai_community'::character varying, old.bahai_cmty_id, 'D'::bpchar);
+
+
+--
+-- Name: bahai_community_insert_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE bahai_community_insert_rule AS ON INSERT TO bahai_community DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'bahai_community'::character varying, new.bahai_cmty_id, 'I'::bpchar);
+
+
+--
+-- Name: bahai_community_update_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE bahai_community_update_rule AS ON UPDATE TO bahai_community DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'bahai_community'::character varying, old.bahai_cmty_id, 'U'::bpchar);
+
+
+--
+-- Name: ca_address_delete_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE ca_address_delete_rule AS ON DELETE TO ca_address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'ca_address'::character varying, old.address_id, 'D'::bpchar);
+
+
+--
+-- Name: ca_address_insert_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE ca_address_insert_rule AS ON INSERT TO ca_address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'ca_address'::character varying, new.address_id, 'I'::bpchar);
+
+
+--
+-- Name: ca_address_update_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE ca_address_update_rule AS ON UPDATE TO ca_address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'ca_address'::character varying, old.address_id, 'U'::bpchar);
+
+
+--
+-- Name: member_delete_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE member_delete_rule AS ON DELETE TO member DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'member'::character varying, old.person_id, 'D'::bpchar);
+
+
+--
+-- Name: member_insert_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE member_insert_rule AS ON INSERT TO member DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'member'::character varying, new.person_id, 'I'::bpchar);
+
+
+--
+-- Name: member_update_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE member_update_rule AS ON UPDATE TO member DO INSERT INTO change_log (session_id, table_name, row_key, trans_type, section) VALUES ((SELECT current_sess_id() AS current_sess_id), 'member'::character varying, old.person_id, 'U'::bpchar, new.section_updated);
+
+
+--
+-- Name: us_address_delete_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE us_address_delete_rule AS ON DELETE TO us_address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'us_address'::character varying, old.address_id, 'D'::bpchar);
+
+
+--
+-- Name: us_address_insert_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE us_address_insert_rule AS ON INSERT TO us_address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'us_address'::character varying, new.address_id, 'I'::bpchar);
+
+
+--
+-- Name: us_address_update_rule; Type: RULE; Schema: public; Owner: bmartin
+--
+
+CREATE RULE us_address_update_rule AS ON UPDATE TO us_address DO INSERT INTO change_log (session_id, table_name, row_key, trans_type) VALUES ((SELECT current_sess_id() AS current_sess_id), 'us_address'::character varying, old.address_id, 'U'::bpchar);
+
+
+--
+-- Name: address_country_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY address
+    ADD CONSTRAINT address_country_code_fkey FOREIGN KEY (country_code) REFERENCES country(country_code);
+
+
+--
+-- Name: atc_member_cluster_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY atc_member
+    ADD CONSTRAINT atc_member_cluster_code_fkey FOREIGN KEY (cluster_code) REFERENCES bahai_cluster(cluster_code) ON DELETE CASCADE;
+
+
+--
+-- Name: bahai_community_bahai_cluster_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY bahai_community
+    ADD CONSTRAINT bahai_community_bahai_cluster_fkey FOREIGN KEY (bahai_cluster) REFERENCES bahai_cluster(cluster_code) ON DELETE CASCADE;
+
+
+--
+-- Name: bahai_community_country_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY bahai_community
+    ADD CONSTRAINT bahai_community_country_code_fkey FOREIGN KEY (country_code) REFERENCES country(country_code);
+
+
+--
+-- Name: ca_address_country_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY ca_address
+    ADD CONSTRAINT ca_address_country_code_fkey FOREIGN KEY (country_code) REFERENCES country(country_code);
+
+
+--
+-- Name: emergency_contact_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY emergency_contact
+    ADD CONSTRAINT emergency_contact_person_id_fkey FOREIGN KEY (person_id) REFERENCES member(person_id) ON DELETE CASCADE;
+
+
+--
+-- Name: emergency_contact_rel_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY emergency_contact
+    ADD CONSTRAINT emergency_contact_rel_person_id_fkey FOREIGN KEY (rel_person_id) REFERENCES person(person_id) ON DELETE CASCADE;
+
+
+--
+-- Name: member_bahai_cmty_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY member
+    ADD CONSTRAINT member_bahai_cmty_id_fkey FOREIGN KEY (bahai_cmty_id) REFERENCES bahai_community(bahai_cmty_id) ON DELETE CASCADE;
+
+
+--
+-- Name: member_employment_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY member_employment
+    ADD CONSTRAINT member_employment_person_id_fkey FOREIGN KEY (person_id) REFERENCES member(person_id) ON DELETE CASCADE;
+
+
+--
+-- Name: member_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY member
+    ADD CONSTRAINT member_person_id_fkey FOREIGN KEY (person_id) REFERENCES person(person_id) ON DELETE CASCADE;
+
+
+--
+-- Name: us_address_country_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: bmartin
+--
+
+ALTER TABLE ONLY us_address
+    ADD CONSTRAINT us_address_country_code_fkey FOREIGN KEY (country_code) REFERENCES country(country_code);
+
+
+--
+-- Name: public; Type: ACL; Schema: -; Owner: postgres
+--
+
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+REVOKE ALL ON SCHEMA public FROM postgres;
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT ALL ON SCHEMA public TO PUBLIC;
+
+
+--
+-- Name: address_id_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE address_id_seq FROM PUBLIC;
+REVOKE ALL ON TABLE address_id_seq FROM bmartin;
+GRANT ALL ON TABLE address_id_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE address_id_seq TO apache;
+
+
+--
+-- Name: address; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE address FROM PUBLIC;
+REVOKE ALL ON TABLE address FROM bmartin;
+GRANT ALL ON TABLE address TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE address TO apache;
+
+
+--
+-- Name: admin; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE "admin" FROM PUBLIC;
+REVOKE ALL ON TABLE "admin" FROM bmartin;
+GRANT ALL ON TABLE "admin" TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE "admin" TO apache;
+
+
+--
+-- Name: app_session; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE app_session FROM PUBLIC;
+REVOKE ALL ON TABLE app_session FROM bmartin;
+GRANT ALL ON TABLE app_session TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE app_session TO apache;
+
+
+--
+-- Name: app_user; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE app_user FROM PUBLIC;
+REVOKE ALL ON TABLE app_user FROM bmartin;
+GRANT ALL ON TABLE app_user TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE app_user TO apache;
+
+
+--
+-- Name: change_log; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE change_log FROM PUBLIC;
+REVOKE ALL ON TABLE change_log FROM bmartin;
+GRANT ALL ON TABLE change_log TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE change_log TO apache;
+
+
+--
+-- Name: app_user_creator; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE app_user_creator FROM PUBLIC;
+REVOKE ALL ON TABLE app_user_creator FROM bmartin;
+GRANT ALL ON TABLE app_user_creator TO bmartin;
+GRANT SELECT ON TABLE app_user_creator TO apache;
+
+
+--
+-- Name: app_user_mods; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE app_user_mods FROM PUBLIC;
+REVOKE ALL ON TABLE app_user_mods FROM bmartin;
+GRANT ALL ON TABLE app_user_mods TO bmartin;
+GRANT SELECT ON TABLE app_user_mods TO apache;
+
+
+--
+-- Name: app_user_privilege; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE app_user_privilege FROM PUBLIC;
+REVOKE ALL ON TABLE app_user_privilege FROM bmartin;
+GRANT ALL ON TABLE app_user_privilege TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE app_user_privilege TO apache;
+
+
+--
+-- Name: atc_member; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE atc_member FROM PUBLIC;
+REVOKE ALL ON TABLE atc_member FROM bmartin;
+GRANT ALL ON TABLE atc_member TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE atc_member TO apache;
+
+
+--
+-- Name: bahai_cluster; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE bahai_cluster FROM PUBLIC;
+REVOKE ALL ON TABLE bahai_cluster FROM bmartin;
+GRANT ALL ON TABLE bahai_cluster TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE bahai_cluster TO apache;
+
+
+--
+-- Name: bahai_cmty_id_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE bahai_cmty_id_seq FROM PUBLIC;
+REVOKE ALL ON TABLE bahai_cmty_id_seq FROM bmartin;
+GRANT ALL ON TABLE bahai_cmty_id_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE bahai_cmty_id_seq TO apache;
+
+
+--
+-- Name: bahai_community; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE bahai_community FROM PUBLIC;
+REVOKE ALL ON TABLE bahai_community FROM bmartin;
+GRANT ALL ON TABLE bahai_community TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE bahai_community TO apache;
+
+
+--
+-- Name: bahai_eu; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE bahai_eu FROM PUBLIC;
+REVOKE ALL ON TABLE bahai_eu FROM bmartin;
+GRANT ALL ON TABLE bahai_eu TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE bahai_eu TO apache;
+
+
+--
+-- Name: ca_address; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE ca_address FROM PUBLIC;
+REVOKE ALL ON TABLE ca_address FROM bmartin;
+GRANT ALL ON TABLE ca_address TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE ca_address TO apache;
+
+
+--
+-- Name: ca_location; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE ca_location FROM PUBLIC;
+REVOKE ALL ON TABLE ca_location FROM bmartin;
+GRANT ALL ON TABLE ca_location TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE ca_location TO apache;
+
+
+--
+-- Name: country_display_order_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE country_display_order_seq FROM PUBLIC;
+REVOKE ALL ON TABLE country_display_order_seq FROM bmartin;
+GRANT ALL ON TABLE country_display_order_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE country_display_order_seq TO apache;
+
+
+--
+-- Name: country; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE country FROM PUBLIC;
+REVOKE ALL ON TABLE country FROM bmartin;
+GRANT ALL ON TABLE country TO bmartin;
+GRANT SELECT,REFERENCES ON TABLE country TO apache;
+
+
+--
+-- Name: db_error_id_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE db_error_id_seq FROM PUBLIC;
+REVOKE ALL ON TABLE db_error_id_seq FROM bmartin;
+GRANT ALL ON TABLE db_error_id_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE db_error_id_seq TO apache;
+
+
+--
+-- Name: db_error_log; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE db_error_log FROM PUBLIC;
+REVOKE ALL ON TABLE db_error_log FROM bmartin;
+GRANT ALL ON TABLE db_error_log TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE db_error_log TO apache;
+
+
+--
+-- Name: edit_error; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE edit_error FROM PUBLIC;
+REVOKE ALL ON TABLE edit_error FROM bmartin;
+GRANT ALL ON TABLE edit_error TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE edit_error TO apache;
+
+
+--
+-- Name: edit_errors_group; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE edit_errors_group FROM PUBLIC;
+REVOKE ALL ON TABLE edit_errors_group FROM bmartin;
+GRANT ALL ON TABLE edit_errors_group TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE edit_errors_group TO apache;
+
+
+--
+-- Name: edit_errors_group_id_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE edit_errors_group_id_seq FROM PUBLIC;
+REVOKE ALL ON TABLE edit_errors_group_id_seq FROM bmartin;
+GRANT ALL ON TABLE edit_errors_group_id_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE edit_errors_group_id_seq TO apache;
+
+
+--
+-- Name: emergency_contact; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE emergency_contact FROM PUBLIC;
+REVOKE ALL ON TABLE emergency_contact FROM bmartin;
+GRANT ALL ON TABLE emergency_contact TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE emergency_contact TO apache;
+
+
+--
+-- Name: event; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE event FROM PUBLIC;
+REVOKE ALL ON TABLE event FROM bmartin;
+GRANT ALL ON TABLE event TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE event TO apache;
+
+
+--
+-- Name: event_counts; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE event_counts FROM PUBLIC;
+REVOKE ALL ON TABLE event_counts FROM bmartin;
+GRANT ALL ON TABLE event_counts TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE event_counts TO apache;
+
+
+--
+-- Name: event_notice; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE event_notice FROM PUBLIC;
+REVOKE ALL ON TABLE event_notice FROM bmartin;
+GRANT ALL ON TABLE event_notice TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE event_notice TO apache;
+
+
+--
+-- Name: event_person; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE event_person FROM PUBLIC;
+REVOKE ALL ON TABLE event_person FROM bmartin;
+GRANT ALL ON TABLE event_person TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE event_person TO apache;
+
+
+--
+-- Name: event_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE event_seq FROM PUBLIC;
+REVOKE ALL ON TABLE event_seq FROM bmartin;
+GRANT ALL ON TABLE event_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE event_seq TO apache;
+
+
+--
+-- Name: event_type; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE event_type FROM PUBLIC;
+REVOKE ALL ON TABLE event_type FROM bmartin;
+GRANT ALL ON TABLE event_type TO bmartin;
+GRANT SELECT ON TABLE event_type TO apache;
+
+
+--
+-- Name: feedback; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE feedback FROM PUBLIC;
+REVOKE ALL ON TABLE feedback FROM bmartin;
+GRANT ALL ON TABLE feedback TO bmartin;
+GRANT INSERT,SELECT ON TABLE feedback TO apache;
+
+
+--
+-- Name: gb_address; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE gb_address FROM PUBLIC;
+REVOKE ALL ON TABLE gb_address FROM bmartin;
+GRANT ALL ON TABLE gb_address TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE gb_address TO apache;
+
+
+--
+-- Name: gb_location; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE gb_location FROM PUBLIC;
+REVOKE ALL ON TABLE gb_location FROM bmartin;
+GRANT ALL ON TABLE gb_location TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE gb_location TO apache;
+
+
+--
+-- Name: healthcare_prov_id_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE healthcare_prov_id_seq FROM PUBLIC;
+REVOKE ALL ON TABLE healthcare_prov_id_seq FROM bmartin;
+GRANT ALL ON TABLE healthcare_prov_id_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE healthcare_prov_id_seq TO apache;
+
+
+--
+-- Name: healthcare_provider; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE healthcare_provider FROM PUBLIC;
+REVOKE ALL ON TABLE healthcare_provider FROM bmartin;
+GRANT ALL ON TABLE healthcare_provider TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE healthcare_provider TO apache;
+
+
+--
+-- Name: lsa_info; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE lsa_info FROM PUBLIC;
+REVOKE ALL ON TABLE lsa_info FROM bmartin;
+GRANT ALL ON TABLE lsa_info TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE lsa_info TO apache;
+
+
+--
+-- Name: lsa_service; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE lsa_service FROM PUBLIC;
+REVOKE ALL ON TABLE lsa_service FROM bmartin;
+GRANT ALL ON TABLE lsa_service TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE lsa_service TO apache;
+
+
+--
+-- Name: medical_condition; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE medical_condition FROM PUBLIC;
+REVOKE ALL ON TABLE medical_condition FROM bmartin;
+GRANT ALL ON TABLE medical_condition TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE medical_condition TO apache;
+
+
+--
+-- Name: member; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE member FROM PUBLIC;
+REVOKE ALL ON TABLE member FROM bmartin;
+GRANT ALL ON TABLE member TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE member TO apache;
+
+
+--
+-- Name: member_employment; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE member_employment FROM PUBLIC;
+REVOKE ALL ON TABLE member_employment FROM bmartin;
+GRANT ALL ON TABLE member_employment TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE member_employment TO apache;
+
+
+--
+-- Name: member_healthcare_provider; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE member_healthcare_provider FROM PUBLIC;
+REVOKE ALL ON TABLE member_healthcare_provider FROM bmartin;
+GRANT ALL ON TABLE member_healthcare_provider TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE member_healthcare_provider TO apache;
+
+
+--
+-- Name: person_id_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE person_id_seq FROM PUBLIC;
+REVOKE ALL ON TABLE person_id_seq FROM bmartin;
+GRANT ALL ON TABLE person_id_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE person_id_seq TO apache;
+
+
+--
+-- Name: person; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE person FROM PUBLIC;
+REVOKE ALL ON TABLE person FROM bmartin;
+GRANT ALL ON TABLE person TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE person TO apache;
+
+
+--
+-- Name: person_label; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE person_label FROM PUBLIC;
+REVOKE ALL ON TABLE person_label FROM bmartin;
+GRANT ALL ON TABLE person_label TO bmartin;
+GRANT SELECT ON TABLE person_label TO apache;
+
+
+--
+-- Name: state_display_order_seq; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE state_display_order_seq FROM PUBLIC;
+REVOKE ALL ON TABLE state_display_order_seq FROM bmartin;
+GRANT ALL ON TABLE state_display_order_seq TO bmartin;
+GRANT SELECT,UPDATE ON TABLE state_display_order_seq TO apache;
+
+
+--
+-- Name: state; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE state FROM PUBLIC;
+REVOKE ALL ON TABLE state FROM bmartin;
+GRANT ALL ON TABLE state TO bmartin;
+GRANT SELECT,REFERENCES ON TABLE state TO apache;
+
+
+--
+-- Name: superuser; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE "superuser" FROM PUBLIC;
+REVOKE ALL ON TABLE "superuser" FROM bmartin;
+GRANT ALL ON TABLE "superuser" TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE "superuser" TO apache;
+
+
+--
+-- Name: us_address; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE us_address FROM PUBLIC;
+REVOKE ALL ON TABLE us_address FROM bmartin;
+GRANT ALL ON TABLE us_address TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE us_address TO apache;
+
+
+--
+-- Name: us_location; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE us_location FROM PUBLIC;
+REVOKE ALL ON TABLE us_location FROM bmartin;
+GRANT ALL ON TABLE us_location TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE us_location TO apache;
+
+
+--
+-- Name: website; Type: ACL; Schema: public; Owner: bmartin
+--
+
+REVOKE ALL ON TABLE website FROM PUBLIC;
+REVOKE ALL ON TABLE website FROM bmartin;
+GRANT ALL ON TABLE website TO bmartin;
+GRANT INSERT,SELECT,UPDATE,DELETE,REFERENCES ON TABLE website TO apache;
+
+
+--
+-- PostgreSQL database dump complete
+--
+
