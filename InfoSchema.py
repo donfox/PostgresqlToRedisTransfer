@@ -23,7 +23,8 @@ def loadSchema(conn, sqlStmt):
     return cList
     
 def collectSchemaData (whatToDo,conn):
-    '''
+    '''  Returns a list of data items returned from a cursor based on the given
+         SQL statement. 
     '''
     if (whatToDo == 'listAllUsers'):
        ret = loadSchema(conn, 'SELECT usename FROM pg_user');    
@@ -75,6 +76,6 @@ if __name__  ==  "__main__":
     psql_db = 'bahai03db'; user = 'donfox1'
     conn = basicPSQL.PSQLconnect(psql_db, user)
     
-    rv = collectSchemaData('listTriggers', conn); print rv
+    rv = collectSchemaData('listAllUsers', conn); print rv
 
     conn.close()

@@ -1,7 +1,7 @@
 #!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 #
-# descPSQL.py - Six useful, basic functions to access a postgreSQL database.
+# basicPSQL.py - Six basic functions to access a postgreSQL database.
 #            1. to connect to the given db
 #            2. to list table names for a given psql database
 #            3. to list columns names for a given table
@@ -9,13 +9,27 @@
 #            5. to get the data from a table associated with a given column
 
 # Note: make this a class!
-
+import sys 
+reload(sys) 
+sys.setdefaultencoding("utf-8")
+import basicPSQL
 import psycopg2
 import psycopg2.extras
 import pprint
 
+def useCursor(conn, sqlStmt):
+    ''' Use connection and SQL statement to load data into a cursor, then
+        pass thart data back to caler in a list.
+    '''
+    cList = []
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    result = cursor.execute(sqlStmt);
+    elements = cursor.fetchall()
+    for elm in elements:
+        cList = cList + elm
+    cursor.close()
+    return cList
 
-   	
 def PSQLconnect (dataBase, user):
         ''' Connect to a given database and open a cursor for it, which is
             passed back to the caller.
@@ -31,108 +45,80 @@ def PSQLconnect (dataBase, user):
         
         return conn
 
-def getPSQLdbs (conn):
-    ''' Gets the names of postgreSQL databases on the system. '''
-    psqlist = []
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute("SELECT datname FROM pg_database")
-    
-    psqlDBs = cursor.fetchall()
-    for db in psqlDBs:
-        psqlist = psqlist + db
-    
-    return psqlist
+def collectDB_Data (*args):
+    '''  Returns a list of data items returned from a cursor based on the given
+         SQL statement. 
+    '''
+    whatToDo = args[0]
+    conn = args[1]
 
-def getTableNames (conn):
-	''' Gets table names list from information schema for a given database.'''
-	tablist = []
-	cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-	cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ")
-	
-	psqlTabs = cursor.fetchall()
-	for table in psqlTabs:
-	    tablist = tablist + table
-	
-	return tablist
+    if (whatToDo == 'listTableNames'):
+        if (args[1]): conn = args[1]
+        ret = useCursor(conn, 'SELECT table_name FROM information_schema.tables WHERE table_schema = \'public\' ');
+    elif (whatToDo == 'listColNames'):
+        if (args[1]): conn = args[1]
+        if (args[2]): table_name = args[2] 
+        ret = useCursor(conn, " SELECT column_name FROM information_schema.columns WHERE table_name=" + repr(table_name))
+    elif (whatToDo == 'listPSQLdbs'):
+        conn = args[1]
+        ret = useCursor(conn, "SELECT datname FROM pg_database")
+    elif (whatToDo == 'listTableData'):
+        if (args[2]): table_name = args[2]
+        ret = useCursor(conn, "SELECT * FROM " + table_name)
+    elif (whatToDo == 'listColdata'):
+        if (args[2]): table_name = args[2]
+        if (args[3]): col = args[3]
+        ret = useCursor(conn, "SELECT " + col + " FROM " + table_name)
+    elif (whatToDo == 'listPrimaryKey'):
+        table_name = args[2]
+        selectStr = "SELECT pg_attribute.attname, \
+	                     format_type(pg_attribute.atttypid, \
+	                     pg_attribute.atttypmod) \
+	                 FROM pg_index, pg_class, pg_attribute  \
+	                 WHERE pg_class.oid='TABLENAME'::regclass \
+	                 AND indrelid = pg_class.oid \
+	                 AND pg_attribute.attrelid = pg_class.oid \
+	                 AND pg_attribute.attnum = any(pg_index.indkey) \
+	                 AND pg_index.indisprimary IS TRUE"
+        queryStr = selectStr.replace('TABLENAME', str(table_name))
+        primaryKeyList = useCursor(conn, queryStr)
+        if not primaryKeyList: return 'None'
+        primaryKey = primaryKeyList[0]
+        return str(primaryKey) 
+    else:
+       ret = "Choice Not Avaliable"
 
-def getColumnNames (conn, table_name):
-    ''' Gets a list of the column names for a given table. '''
-    colist = []
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(" SELECT column_name FROM information_schema.columns WHERE table_name=" + repr(table_name))
-    psqlCols = cursor.fetchall()
-    for col in psqlCols:
-        colist = colist + col
-    
-    return colist
-
-def getTableData (conn, table_name):
-    ''' Gets a list of all the data for a given table. '''
-    selectStr = "SELECT * FROM " + table_name;
-    recList = []
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(selectStr)
-    records = cursor.fetchall()
-    for record in records:
-        recList = recList + record
-    
-    return recList
-
-def getColData (conn, table_name, col):
-    ''' Gets s list of column data, across rows, for a given table.'''
-    selectStr = "SELECT " + col + " FROM " + table_name
-    colList = []
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(selectStr)
-    records = cursor.fetchall()
-    for record in records:
-        colList = colList + record
-    
-    return colList
-
-def getPrimaryKey (conn, table):
-    ''' Returnes primary key for the given table '''     
-    selectStr = "SELECT pg_attribute.attname, \
-                        format_type(pg_attribute.atttypid, \
-                        pg_attribute.atttypmod) \
-    	         FROM pg_index, pg_class, pg_attribute  \
-    	         WHERE pg_class.oid='TABLENAME'::regclass \
-    	         AND indrelid = pg_class.oid \
-    	         AND pg_attribute.attrelid = pg_class.oid \
-    	         AND pg_attribute.attnum = any(pg_index.indkey) \
-    	         AND pg_index.indisprimary IS TRUE"
-
-    selStmt = selectStr.replace('TABLENAME', str(table)) 
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute(selStmt)
-    primaryKeyList = cursor.fetchall()
-    if not primaryKeyList: return 'None'
-    primaryKey = primaryKeyList[0]
-
-    return str(primaryKey[0])
+    return ret
 
 if __name__  ==  "__main__":
    
-   # Get connection
-   psql_db = 'bahai03db'; user = 'donfox1'
-   conn = PSQLconnect(psql_db, user)
+    # Get connection
+    #
+    psql_db = 'bahai03db'; user = 'donfox1'
+    conn = PSQLconnect(psql_db, user)
+    if (conn):
+        # Get a list of psql dbs.
+        #
+        dbList = collectDB_Data('listPSQLdbs', conn); pprint.pprint(dbList)
 
-   # Get a list of avaliable psql dbs on the system.
-   dbList = getPSQLdbs(conn); #pprint.pprint(dbList)
-   
-   # Get a list of tables for the pdql db that is connected.
-#   tableList = getTableNames(conn); #pprint.pprint(tableList)
-   
-   # Get column names list for a given table in the connected psql db.
-   columnList = getColumnNames(conn, 'person'); #pprint.pprint(columnList)
-   
-   # Get table data
-   tableData = getTableData(conn, 'person'); #sprint tableData
-   
-   # Get data for a given column of a given table
-   colData = getColData(conn, 'country', 'display_order' ); 
-   #print "COL Data for country, country_code",  colData
+        # Get a list of tables for the db.
+        #
+        tableList = collectDB_Data('listTableNames', conn ); print tableList
 
-   pkey = getPrimaryKey(conn, 'country'); print pkey
+        # Get column names for the given table.
+        #
+        colData = collectDB_Data('listColNames', conn, 'country'); print colData
 
-   conn.close()
+        # Get table data for the given table
+        #
+        tableData = collectDB_Data('listTableData' , conn, 'country'); print(tableData)
+
+        # Get display order of the given table
+        #    
+        colData = collectDB_Data('listColdata' , conn, 'country', 'display_order'); print(colData)
+
+        pKey = collectDB_Data('listPrimaryKey', conn, 'country'); print pKey
+        conn.close()
+    else:
+	    print "Could not connect to database!"
+	

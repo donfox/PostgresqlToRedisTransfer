@@ -137,25 +137,27 @@ def storeData(conn, db_name):
 
     # iterates list of public tables of connected db
     # 
-    tableList = basicPSQL.getTableNames(conn)
+    tableList = basicPSQL.collectDB_Data('listTableNames', conn); 
     for table in tableList:
         tbl_cntr += 1
-        colList = basicPSQL.getColumnNames(conn,table)    
+        colList = basicPSQL.collectDB_Data('listColNames', conn, table)
         colList = colList[::-1]  # reverse column list                        
 
         # get primary key per table
-        pKey = basicPSQL.getPrimaryKey(conn, table)
+        pKey = basicPSQL.collectDB_Data('listPrimaryKey', conn, 'country')
 
         # get data for each column in the table
-        for col in colList:       
-            dataList = basicPSQL.getColData(conn, table, col)
+        for col in colList:
+            dataList = basicPSQL.collectDB_Data('listColNames', conn, 'country')
+
             # make the key and make a list of keys 
             key = db_name + ':' + table + ':' + pKey + ':' + col;
             keyList.append(key)
+
             # construct the value string 
             value = ''  # new value string for each key
-            for data in dataList:  
-                value += str(data) + ' '
+            for data in dataList: value += str(data) + ' '
+
             # write key-value pair to redis
             r.set(key, value)
 
@@ -167,8 +169,8 @@ if __name__  ==  "__main__":
     # Gets connection 
     psql_db = 'bahai03db'; user = 'donfox1'
     conn = basicPSQL.PSQLconnect(psql_db, user)
-
-#    keys = storeData(conn, psql_db); testRedis(keys)
-    keys =storeSchema(conn, psql_db); testRedis(keys)
-
-
+    if (conn):
+        keys = storeData(conn, psql_db); testRedis(keys)
+        keys = storeSchema(conn, psql_db); testRedis(keys)
+    else:
+        print "Connection to DB failed!"
