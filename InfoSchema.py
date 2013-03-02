@@ -10,10 +10,8 @@ import basicPSQL
 import psycopg2
 import psycopg2.extras
 
-#def loadSchema(conn, sqlStmt):
 def runSQL_stmt(conn, sqlStmt):
     ''' Takes DB connection and SQL statement; returns result list.
-        Note: chang function name; "executeSQL"
     '''
     cList = []
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
