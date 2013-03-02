@@ -19,7 +19,7 @@ import pprint
 
 def useCursor(conn, sqlStmt):
     ''' Use connection and SQL statement to load data into a cursor, then
-        pass thart data back to caler in a list.
+        pass that data back to caller in a list.
     '''
     cList = []
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -31,8 +31,7 @@ def useCursor(conn, sqlStmt):
     return cList
 
 def PSQLconnect (dataBase, user):
-        ''' Connect to a given database and open a cursor for it, which is
-            passed back to the caller.
+        ''' Connect to database and open a cursor, which is returned.
         '''
         conn_string = 'host=localhost  dbname=' + dataBase
         conn_string = conn_string + ' user=' + user
@@ -99,25 +98,32 @@ if __name__  ==  "__main__":
     if (conn):
         # Get a list of psql dbs.
         #
-        dbList = collectDB_Data('listPSQLdbs', conn); pprint.pprint(dbList)
+        dbList = collectDB_Data('listPSQLdbs', conn); 
+    #    pprint.pprint(dbList)
 
         # Get a list of tables for the db.
         #
-        tableList = collectDB_Data('listTableNames', conn ); print tableList
+        tableList = collectDB_Data('listTableNames', conn ); 
+        print tableList
 
         # Get column names for the given table.
         #
-        colData = collectDB_Data('listColNames', conn, 'country'); print colData
+        colData = collectDB_Data('listColNames', conn, 'country'); 
+    #    print colData
 
         # Get table data for the given table
         #
-        tableData = collectDB_Data('listTableData' , conn, 'country'); print(tableData)
+        tableData = collectDB_Data('listTableData' , conn, 'country'); 
+    #    print(tableData)
 
         # Get display order of the given table
         #    
-        colData = collectDB_Data('listColdata' , conn, 'country', 'display_order'); print(colData)
+        colData = collectDB_Data('listColdata' , conn, 'country', 'display_order'); 
+    #    print(colData)
 
-        pKey = collectDB_Data('listPrimaryKey', conn, 'country'); print pKey
+        pKey = collectDB_Data('listPrimaryKey', conn, 'country'); 
+    #    print pKey
+
         conn.close()
     else:
 	    print "Could not connect to database!"

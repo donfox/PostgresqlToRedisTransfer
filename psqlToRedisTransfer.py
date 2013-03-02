@@ -1,7 +1,7 @@
 #!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 #
-# psqlToRedisTransfer.py - Reads postgreSQL databases represents them in redis.
+# psqlToRedisTransfer.py - Reads postgreSQL database represents it in redis.
 #
 import sys 
 reload(sys) 
@@ -15,11 +15,12 @@ import pprint
 r = Redis()    # instantiate a global redis db
 
 def testRedis(keyList):
-    ''' Utility displays values for the given liet of keys'''
+    ''' Utility displays values for the given list of keys'''
     pCntr = 0
     for key in keyList:
         print pCntr, " KEY [", key, "] VALUE [", r.get(key), "]\n"
         pCntr += 1 
+
 
 def generateElem (tag, text):
     ''' Generates a complete XML element'''                                                   
@@ -55,7 +56,15 @@ def storeSchema (conn, db_name ):
          http://www.alberton.info/postgresql_meta_info.html
          http://tharas.wordpress.com/2010/01/12/getting-meta-information-of-a-postgresql-database/
     '''
-    tagTypes = ['users', 'tables', 'constraints',  'indices', 'views',  'coltypes', 'functions', 'triggers']    
+    tagTypes = [ 'users', 
+                 'tables', 
+                 'constraints',  
+                 'indices', 
+                 'views',  
+                 'coltypes', 
+                 'functions', 
+                 'triggers' ]
+    
     key = db_name;
     keyList = []
     charEncodeInfo_tag = "<?xml version='1.0' encoding='utf-8'?>"
@@ -142,25 +151,26 @@ def storeData(conn, db_name):
         tbl_cntr += 1
         colList = basicPSQL.collectDB_Data('listColNames', conn, table)
         colList = colList[::-1]  # reverse column list                        
-
+    
         # get primary key per table
+        #
         pKey = basicPSQL.collectDB_Data('listPrimaryKey', conn, 'country')
-
+        # print pKey
         # get data for each column in the table
         for col in colList:
             dataList = basicPSQL.collectDB_Data('listColNames', conn, 'country')
-
+     
             # make the key and make a list of keys 
             key = db_name + ':' + table + ':' + pKey + ':' + col;
             keyList.append(key)
-
+    
             # construct the value string 
             value = ''  # new value string for each key
             for data in dataList: value += str(data) + ' '
-
+     
             # write key-value pair to redis
-            r.set(key, value)
-
+            r.set(key, value) # Note: turn redis on
+   
     print "\n\tTables Read:", tbl_cntr
     return keyList
 
@@ -170,7 +180,9 @@ if __name__  ==  "__main__":
     psql_db = 'bahai03db'; user = 'donfox1'
     conn = basicPSQL.PSQLconnect(psql_db, user)
     if (conn):
-        keys = storeData(conn, psql_db); testRedis(keys)
-        keys = storeSchema(conn, psql_db); testRedis(keys)
+       keys = storeData(conn, psql_db); 
+       testRedis(keys)
+       keys = storeSchema(conn, psql_db); 
+       testRedis(keys)
     else:
-        print "Connection to DB failed!"
+         print "Connection to DB failed!"

@@ -1,7 +1,7 @@
 #!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 #
-# psqlToRedisTransfer.py - Reads postgreSQL databases represents them in redis.
+# psqlToRedisTransfer.py - Reads postgreSQL database represents it in redis.
 #
 import sys 
 reload(sys) 
@@ -10,8 +10,10 @@ import basicPSQL
 import psycopg2
 import psycopg2.extras
 
-def loadSchema(conn, sqlStmt):
-    '''
+#def loadSchema(conn, sqlStmt):
+def runSQL_stmt(conn, sqlStmt):
+    ''' Takes DB connection and SQL statement; returns result list.
+        Note: chang function name; "executeSQL"
     '''
     cList = []
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -23,31 +25,30 @@ def loadSchema(conn, sqlStmt):
     return cList
     
 def collectSchemaData (whatToDo,conn):
-    '''  Returns a list of data items returned from a cursor based on the given
-         SQL statement. 
+    '''  Returns data resuting from a given SQL statement. 
     '''
     if (whatToDo == 'listAllUsers'):
-       ret = loadSchema(conn, 'SELECT usename FROM pg_user');    
+       ret = runSQL_stmt(conn, 'SELECT usename FROM pg_user');    
     elif (whatToDo == 'listAllTables'):
-	   ret = loadSchema(conn, "SELECT table_name FROM  information_schema.tables \
+	   ret = runSQL_stmt(conn, "SELECT table_name FROM  information_schema.tables \
                                WHERE table_type = 'BASE TABLE' \
                                AND table_schema NOT IN ('pg_catalog', 'information_schema') ")
     elif (whatToDo == 'listAllViews'):
-       ret = loadSchema(conn, "SELECT table_name \
+       ret = runSQL_stmt(conn, "SELECT table_name \
                                FROM information_schema.views \
                                WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
                                AND table_name !~ '^pg_'")
     elif (whatToDo == 'listColnameDataType'):
-        ret = loadSchema(conn, "SELECT column_name, data_type \
+        ret = runSQL_stmt(conn, "SELECT column_name, data_type \
                                 FROM information_schema.columns \
                                 WHERE table_name = 'emp';")
     elif (whatToDo == 'listTabConstraints'):
-        ret = loadSchema(conn, "SELECT  constraint_name, constraint_type  \
+        ret = runSQL_stmt(conn, "SELECT  constraint_name, constraint_type  \
                                 FROM information_schema.table_constraints \
                                 WHERE table_name = 'emp' \
                                 AND constraint_type!='CHECK' ")  
     elif (whatToDo == 'listTabIndices'):
-	    ret = loadSchema(conn, "SELECT  relname FROM pg_class \
+	    ret = runSQL_stmt(conn, "SELECT  relname FROM pg_class \
 					            WHERE oid IN \
 						                   (SELECT indexrelid FROM pg_index, pg_class \
 						                    WHERE pg_class.relname='emp'  \
@@ -55,10 +56,10 @@ def collectSchemaData (whatToDo,conn):
 						                    AND indisunique != 't'  \
 						                    AND indisprimary != 't')" )   
     elif (whatToDo == 'listFunctions'):
-	    ret = loadSchema(conn, "SELECT routine_name FROM information_schema.routines \
+	    ret = runSQL_stmt(conn, "SELECT routine_name FROM information_schema.routines \
 						        WHERE specific_schema NOT IN ('pg_catalog', 'information_schema')")   
     elif (whatToDo == 'listTriggers'):
-	    ret = loadSchema(conn, "SELECT DISTINCT trigger_name FROM information_schema.triggers \
+	    ret = runSQL_stmt(conn, "SELECT DISTINCT trigger_name FROM information_schema.triggers \
 		                        WHERE event_object_table = 'emp' \
 		                        AND trigger_schema NOT IN ('pg_catalog', 'information_schema') ")
     else:
@@ -73,9 +74,15 @@ def collectSchemaData (whatToDo,conn):
 if __name__  ==  "__main__":
 	
     # Get connection
+    #
     psql_db = 'bahai03db'; user = 'donfox1'
     conn = basicPSQL.PSQLconnect(psql_db, user)
     
-    rv = collectSchemaData('listAllUsers', conn); print rv
+    #  Collect Data
+    #
+    rv = collectSchemaData('listAllTables', conn); 
+    print rv
 
+    # Close Connection
+    #
     conn.close()
