@@ -39,10 +39,10 @@ def generateElem (tag, text):
                                                                               
 
 def storeSchema (conn, db_name ):
-    ''' Stores the information schema for a postgreSQL database to a redis
-        database as a single XML tree.
+    ''' Stores the information schema for a postgreSQL database to redis as a
+        single XML tree.
 
-        Information schema is here regarded as lists of:
+        Information schema is here regarded as a list of:
             1. users
             2. tables
             3. table constraints
@@ -181,7 +181,7 @@ if __name__  ==  "__main__":
     conn = basicPSQL.PSQLconnect(psql_db, user)
     if (conn):
        keys = storeData(conn, psql_db); 
-       testRedis(keys)
+       #testRedis(keys)
        keys = storeSchema(conn, psql_db); 
        testRedis(keys)
     else:
