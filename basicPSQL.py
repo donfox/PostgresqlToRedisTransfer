@@ -7,8 +7,6 @@
 #            3. to list columns names for a given table
 #            4. to get the data in a given table; a select *
 #            5. to get the data from a table associated with a given column
-
-# Note: make this a class!
 import sys 
 reload(sys) 
 sys.setdefaultencoding("utf-8")
@@ -104,7 +102,7 @@ if __name__  ==  "__main__":
         # Get a list of tables for the db.
         #
         tableList = collectDB_Data('listTableNames', conn ); 
-        print tableList
+        #print tableList
 
         # Get column names for the given table.
         #
@@ -114,12 +112,12 @@ if __name__  ==  "__main__":
         # Get table data for the given table
         #
         tableData = collectDB_Data('listTableData' , conn, 'country'); 
-    #    print(tableData)
+        print(tableData)
 
         # Get display order of the given table
         #    
         colData = collectDB_Data('listColdata' , conn, 'country', 'display_order'); 
-    #    print(colData)
+        print(colData)
 
         pKey = collectDB_Data('listPrimaryKey', conn, 'country'); 
     #    print pKey

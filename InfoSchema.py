@@ -1,7 +1,7 @@
 #!/usr/bin/python2.7
 # -*- coding: utf-8 -*-
 #
-# psqlToRedisTransfer.py - Reads postgreSQL database represents it in redis.
+# psqlToRedisTransfer.py - Reads postgreSQL database writes it in redis.
 #
 import sys 
 reload(sys) 
@@ -70,7 +70,6 @@ def collectSchemaData (whatToDo,conn):
         return 'None'
 
 if __name__  ==  "__main__":
-	
     # Get connection
     #
     psql_db = 'bahai03db'; user = 'donfox1'

@@ -175,13 +175,14 @@ def storeData(conn, db_name):
     return keyList
 
 if __name__  ==  "__main__":
-    
+	
     # Gets connection 
+    #
     psql_db = 'bahai03db'; user = 'donfox1'
     conn = basicPSQL.PSQLconnect(psql_db, user)
     if (conn):
        keys = storeData(conn, psql_db); 
-       #testRedis(keys)
+     #  testRedis(keys)
        keys = storeSchema(conn, psql_db); 
        testRedis(keys)
     else:
